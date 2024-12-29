@@ -1,0 +1,1362 @@
+└── packages
+    └── contracts
+        └── controller
+            ├── Scarb.toml
+            └── src
+                ├── account.cairo
+                ├── asserts.cairo
+                ├── delegate_account
+                    ├── delegate_account.cairo
+                    └── interface.cairo
+                ├── external_owners
+                    ├── external_owners.cairo
+                    └── interface.cairo
+                ├── introspection
+                    ├── interface.cairo
+                    └── src5.cairo
+                ├── lib.cairo
+                ├── multiple_owners
+                    ├── interface.cairo
+                    └── multiple_owners.cairo
+                └── session
+                    ├── interface.cairo
+                    └── session.cairo
+
+
+/packages/contracts/controller/Scarb.toml:
+--------------------------------------------------------------------------------
+ 1 | [package]
+ 2 | name = "controller"
+ 3 | version = "0.1.0"
+ 4 | 
+ 5 | # See more keys and their definitions at https://docs.swmansion.com/scarb/docs/reference/manifest.html
+ 6 | 
+ 7 | [dependencies]
+ 8 | starknet.workspace = true
+ 9 | alexandria_encoding.workspace = true
+10 | alexandria_merkle_tree.workspace = true
+11 | snforge_std.workspace = true
+12 | openzeppelin.workspace = true
+13 | argent.workspace = true
+14 | 
+15 | 
+16 | [[target.starknet-contract]]
+17 | allowed-libfuncs-list.name = "experimental"
+18 | sierra = true
+19 | casm = true
+20 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/account.cairo:
+--------------------------------------------------------------------------------
+  1 | // SPDX-License-Identifier: MIT
+  2 | 
+  3 | use starknet::account::Call;
+  4 | use starknet::ContractAddress;
+  5 | use argent::signer::signer_signature::{Signer, SignerSignature, SignerType};
+  6 | 
+  7 | #[starknet::interface]
+  8 | trait IAssertOwner<TState> {
+  9 |     fn assert_owner(self: @TState);
+ 10 | }
+ 11 | 
+ 12 | #[starknet::interface]
+ 13 | trait ICartridgeAccount<TContractState> {
+ 14 |     fn __validate_declare__(ref self: TContractState, class_hash: felt252) -> felt252;
+ 15 |     fn __validate_deploy__(
+ 16 |         ref self: TContractState,
+ 17 |         class_hash: felt252,
+ 18 |         contract_address_salt: felt252,
+ 19 |         owner: CartridgeAccount::Owner,
+ 20 |         guardian: Option<Signer>
+ 21 |     ) -> felt252;
+ 22 | }
+ 23 | 
+ 24 | #[starknet::contract(account)]
+ 25 | mod CartridgeAccount {
+ 26 |     use openzeppelin::upgrades::UpgradeableComponent::InternalTrait;
+ 27 |     use core::traits::TryInto;
+ 28 |     use core::option::OptionTrait;
+ 29 |     use core::array::SpanTrait;
+ 30 |     use core::to_byte_array::FormatAsByteArray;
+ 31 |     use core::array::ArrayTrait;
+ 32 |     use core::traits::Into;
+ 33 |     use core::poseidon::{PoseidonTrait, hades_permutation, poseidon_hash_span};
+ 34 |     use core::result::ResultTrait;
+ 35 |     use hash::HashStateTrait;
+ 36 |     use pedersen::PedersenTrait;
+ 37 |     use starknet::{
+ 38 |         ContractAddress, ClassHash, get_block_timestamp, get_contract_address, VALIDATED,
+ 39 |         replace_class_syscall, get_caller_address, account::Call, SyscallResultTrait, get_tx_info,
+ 40 |         get_execution_info, syscalls::storage_read_syscall,
+ 41 |         storage_access::{
+ 42 |             storage_address_from_base_and_offset, storage_base_address_from_felt252,
+ 43 |             storage_write_syscall
+ 44 |         }
+ 45 |     };
+ 46 | 
+ 47 |     use argent::account::interface::{
+ 48 |         IAccount, IArgentAccount, IArgentUserAccount, IDeprecatedArgentAccount, Version
+ 49 |     };
+ 50 |     use argent::outside_execution::{
+ 51 |         outside_execution::outside_execution_component, interface::{IOutsideExecutionCallback}
+ 52 |     };
+ 53 |     use argent::recovery::interface::{LegacyEscape, LegacyEscapeType, EscapeStatus};
+ 54 |     use argent::signer::{
+ 55 |         signer_signature::{
+ 56 |             Signer, SignerStorageValue, SignerType, StarknetSigner, StarknetSignature, SignerTrait,
+ 57 |             SignerStorageTrait, SignerSignature, SignerSignatureTrait, starknet_signer_from_pubkey
+ 58 |         }
+ 59 |     };
+ 60 |     use argent::upgrade::{
+ 61 |         upgrade::upgrade_component, interface::{IUpgradableCallback, IUpgradableCallbackOld}
+ 62 |     };
+ 63 |     use argent::utils::{
+ 64 |         asserts::{assert_no_self_call, assert_only_self, assert_only_protocol},
+ 65 |         calls::execute_multicall, serialization::full_deserialize,
+ 66 |         transaction_version::{
+ 67 |             TX_V1, TX_V1_ESTIMATE, TX_V3, TX_V3_ESTIMATE, assert_correct_invoke_version,
+ 68 |             assert_correct_declare_version, assert_correct_deploy_account_version, DA_MODE_L1,
+ 69 |             is_estimate_transaction
+ 70 |         }
+ 71 |     };
+ 72 |     use argent::session::interface::{DetailedTypedData, SessionToken, TypedData};
+ 73 | 
+ 74 |     use openzeppelin::security::reentrancyguard::ReentrancyGuardComponent;
+ 75 |     use openzeppelin::upgrades::UpgradeableComponent;
+ 76 |     use openzeppelin::upgrades::interface::IUpgradeable;
+ 77 | 
+ 78 |     use controller::account::{ICartridgeAccount, IAssertOwner};
+ 79 |     use controller::external_owners::external_owners::{
+ 80 |         external_owners_component,
+ 81 |         external_owners_component::InternalImpl as ExternalOwnersInternalImpl
+ 82 |     };
+ 83 |     use controller::delegate_account::delegate_account::delegate_account_component;
+ 84 |     use controller::introspection::src5::src5_component;
+ 85 |     use controller::session::{
+ 86 |         session::session_component::InternalImpl, session::session_component,
+ 87 |         interface::ISessionCallback
+ 88 |     };
+ 89 |     use controller::multiple_owners::{
+ 90 |         multiple_owners::{multiple_owners_component}, interface::IMultipleOwners
+ 91 |     };
+ 92 | 
+ 93 |     const TRANSACTION_VERSION: felt252 = 1;
+ 94 |     // 2**128 + TRANSACTION_VERSION
+ 95 |     const QUERY_VERSION: felt252 = 0x100000000000000000000000000000001;
+ 96 |     const SESSION_TYPED_DATE_MAGIC: felt252 = 'session-typed-data';
+ 97 | 
+ 98 |     component!(path: session_component, storage: session, event: SessionEvent);
+ 99 |     #[abi(embed_v0)]
+100 |     impl SessionImpl = session_component::SessionComponent<ContractState>;
+101 | 
+102 |     component!(
+103 |         path: multiple_owners_component, storage: multiple_owners, event: MultipleOwnersEvent
+104 |     );
+105 |     #[abi(embed_v0)]
+106 |     impl MultipleOwnersImpl =
+107 |         multiple_owners_component::MultipleOwnersImpl<ContractState>;
+108 | 
+109 |     // Execute from outside
+110 |     component!(
+111 |         path: outside_execution_component,
+112 |         storage: execute_from_outside,
+113 |         event: ExecuteFromOutsideEvents
+114 |     );
+115 |     #[abi(embed_v0)]
+116 |     impl ExecuteFromOutside =
+117 |         outside_execution_component::OutsideExecutionImpl<ContractState>;
+118 | 
+119 |     // External owners
+120 |     component!(
+121 |         path: external_owners_component, storage: external_owners, event: ExternalOwnersEvent
+122 |     );
+123 |     #[abi(embed_v0)]
+124 |     impl ExternalOwners =
+125 |         external_owners_component::ExternalOwnersImpl<ContractState>;
+126 | 
+127 |     // Delegate Account
+128 |     component!(
+129 |         path: delegate_account_component, storage: delegate_account, event: DelegateAccountEvents
+130 |     );
+131 |     #[abi(embed_v0)]
+132 |     impl DelegateAccount =
+133 |         delegate_account_component::DelegateAccountImpl<ContractState>;
+134 | 
+135 |     // SRC5
+136 |     component!(path: src5_component, storage: src5, event: SRC5Events);
+137 |     #[abi(embed_v0)]
+138 |     impl SRC5 = src5_component::SRC5Impl<ContractState>;
+139 | 
+140 |     // Upgradeable
+141 |     component!(path: UpgradeableComponent, storage: upgradeable, event: UpgradeableEvent);
+142 |     impl UpgradeableInternalImpl = UpgradeableComponent::InternalImpl<ContractState>;
+143 | 
+144 |     // Reentrancy guard
+145 |     component!(
+146 |         path: ReentrancyGuardComponent, storage: reentrancy_guard, event: ReentrancyGuardEvent
+147 |     );
+148 |     impl ReentrancyGuardInternalImpl = ReentrancyGuardComponent::InternalImpl<ContractState>;
+149 | 
+150 |     #[storage]
+151 |     struct Storage {
+152 |         #[substorage(v0)]
+153 |         multiple_owners: multiple_owners_component::Storage,
+154 |         #[substorage(v0)]
+155 |         reentrancy_guard: ReentrancyGuardComponent::Storage,
+156 |         #[substorage(v0)]
+157 |         session: session_component::Storage,
+158 |         #[substorage(v0)]
+159 |         external_owners: external_owners_component::Storage,
+160 |         #[substorage(v0)]
+161 |         execute_from_outside: outside_execution_component::Storage,
+162 |         #[substorage(v0)]
+163 |         delegate_account: delegate_account_component::Storage,
+164 |         #[substorage(v0)]
+165 |         src5: src5_component::Storage,
+166 |         #[substorage(v0)]
+167 |         upgradeable: UpgradeableComponent::Storage,
+168 |     }
+169 | 
+170 |     #[event]
+171 |     #[derive(Drop, starknet::Event)]
+172 |     enum Event {
+173 |         TransactionExecuted: TransactionExecuted,
+174 |         #[flat]
+175 |         MultipleOwnersEvent: multiple_owners_component::Event,
+176 |         #[flat]
+177 |         ReentrancyGuardEvent: ReentrancyGuardComponent::Event,
+178 |         #[flat]
+179 |         SessionEvent: session_component::Event,
+180 |         #[flat]
+181 |         ExternalOwnersEvent: external_owners_component::Event,
+182 |         #[flat]
+183 |         ExecuteFromOutsideEvents: outside_execution_component::Event,
+184 |         #[flat]
+185 |         DelegateAccountEvents: delegate_account_component::Event,
+186 |         #[flat]
+187 |         SRC5Events: src5_component::Event,
+188 |         #[flat]
+189 |         UpgradeableEvent: UpgradeableComponent::Event
+190 |     }
+191 | 
+192 |     #[derive(Drop, Copy, Serde)]
+193 |     enum Owner {
+194 |         Signer: Signer,
+195 |         Account: ContractAddress,
+196 |     }
+197 | 
+198 |     /// @notice Emitted when the account executes a transaction
+199 |     /// @param hash The transaction hash
+200 |     /// @param response The data returned by the methods called
+201 |     #[derive(Drop, starknet::Event)]
+202 |     struct TransactionExecuted {
+203 |         #[key]
+204 |         hash: felt252,
+205 |         response: Span<Span<felt252>>
+206 |     }
+207 | 
+208 |     mod Errors {
+209 |         const INVALID_CALLER: felt252 = 'Account: invalid caller';
+210 |         const INVALID_SIGNATURE: felt252 = 'Account: invalid signature';
+211 |         const INVALID_TX_VERSION: felt252 = 'Account: invalid tx version';
+212 |         const UNAUTHORIZED: felt252 = 'Account: unauthorized';
+213 |     }
+214 | 
+215 |     #[constructor]
+216 |     fn constructor(ref self: ContractState, owner: Owner, guardian: Option<Signer>) {
+217 |         match owner {
+218 |             Owner::Signer(signer) => {
+219 |                 self.multiple_owners.owners.write(signer.into_guid(), true);
+220 |             },
+221 |             Owner::Account(account) => { self.external_owners._register_external_owner(account); },
+222 |         }
+223 |     }
+224 | 
+225 |     //
+226 |     // External
+227 |     //
+228 | 
+229 |     #[abi(embed_v0)]
+230 |     impl AccountImpl of IAccount<ContractState> {
+231 |         fn __validate__(ref self: ContractState, mut calls: Array<Call>) -> felt252 {
+232 |             let exec_info = get_execution_info().unbox();
+233 |             let tx_info = get_tx_info().unbox();
+234 | 
+235 |             assert(tx_info.paymaster_data.is_empty(), 'unsupported-paymaster');
+236 | 
+237 |             if self.session.is_session(tx_info.signature) {
+238 |                 self
+239 |                     .session
+240 |                     .validate_session_serialized(
+241 |                         tx_info.signature, calls.span(), tx_info.transaction_hash
+242 |                     );
+243 |             } else {
+244 |                 self
+245 |                     .assert_valid_calls_and_signature(
+246 |                         calls.span(),
+247 |                         tx_info.transaction_hash,
+248 |                         tx_info.signature,
+249 |                         is_from_outside: false,
+250 |                         account_address: exec_info.contract_address,
+251 |                     );
+252 |             }
+253 |             starknet::VALIDATED
+254 |         }
+255 | 
+256 |         fn __execute__(ref self: ContractState, mut calls: Array<Call>) -> Array<Span<felt252>> {
+257 |             self.reentrancy_guard.start();
+258 |             let exec_info = get_execution_info().unbox();
+259 |             let tx_info = exec_info.tx_info.unbox();
+260 |             assert_only_protocol(exec_info.caller_address);
+261 |             assert_correct_invoke_version(tx_info.version);
+262 |             let signature = tx_info.signature;
+263 |             if self.session.is_session(signature) {
+264 |                 let session_timestamp = *signature[1];
+265 |                 // can call unwrap safely as the session has already been deserialized
+266 |                 let session_timestamp_u64 = session_timestamp.try_into().unwrap();
+267 |                 assert(
+268 |                     session_timestamp_u64 >= exec_info.block_info.unbox().block_timestamp,
+269 |                     'session/expired'
+270 |                 );
+271 |             }
+272 | 
+273 |             let retdata = execute_multicall(calls.span());
+274 | 
+275 |             self
+276 |                 .emit(
+277 |                     TransactionExecuted { hash: tx_info.transaction_hash, response: retdata.span() }
+278 |                 );
+279 |             self.reentrancy_guard.end();
+280 |             retdata
+281 |         }
+282 | 
+283 |         fn is_valid_signature(
+284 |             self: @ContractState, hash: felt252, signature: Array<felt252>
+285 |         ) -> felt252 {
+286 |             if *signature[0] == SESSION_TYPED_DATE_MAGIC {
+287 |                 if self
+288 |                     .is_valid_session_typed_data_signature(
+289 |                         hash, signature.span().slice(1, signature.len() - 1)
+290 |                     ) {
+291 |                     starknet::VALIDATED
+292 |                 } else {
+293 |                     0
+294 |                 }
+295 |             } else if self
+296 |                 .is_valid_span_signature(
+297 |                     hash, self.parse_signature_array(signature.span()).span()
+298 |                 ) {
+299 |                 starknet::VALIDATED
+300 |             } else {
+301 |                 0
+302 |             }
+303 |         }
+304 |     }
+305 | 
+306 |     #[abi(embed_v0)]
+307 |     impl CartridgeAccountImpl of ICartridgeAccount<ContractState> {
+308 |         fn __validate_declare__(ref self: ContractState, class_hash: felt252) -> felt252 {
+309 |             let tx_info = get_tx_info().unbox();
+310 |             assert_correct_declare_version(tx_info.version);
+311 |             assert(tx_info.paymaster_data.is_empty(), 'unsupported-paymaster');
+312 | 
+313 |             if self.session.is_session(tx_info.signature) {
+314 |                 let call = Call {
+315 |                     to: get_contract_address(),
+316 |                     selector: selector!("__declare_transaction__"),
+317 |                     calldata: array![class_hash,].span()
+318 |                 };
+319 |                 self
+320 |                     .session
+321 |                     .validate_session_serialized(
+322 |                         tx_info.signature, array![call].span(), tx_info.transaction_hash
+323 |                     );
+324 |             } else {
+325 |                 self
+326 |                     .assert_valid_span_signature(
+327 |                         tx_info.transaction_hash, self.parse_signature_array(tx_info.signature)
+328 |                     );
+329 |             }
+330 |             starknet::VALIDATED
+331 |         }
+332 | 
+333 |         fn __validate_deploy__(
+334 |             ref self: ContractState,
+335 |             class_hash: felt252,
+336 |             contract_address_salt: felt252,
+337 |             owner: Owner,
+338 |             guardian: Option<Signer>,
+339 |         ) -> felt252 {
+340 |             let tx_info = get_tx_info().unbox();
+341 |             assert_correct_deploy_account_version(tx_info.version);
+342 |             assert(tx_info.paymaster_data.is_empty(), 'unsupported-paymaster');
+343 |             self
+344 |                 .assert_valid_span_signature(
+345 |                     tx_info.transaction_hash, self.parse_signature_array(tx_info.signature)
+346 |                 );
+347 |             starknet::VALIDATED
+348 |         }
+349 |     }
+350 | 
+351 |     impl SessionCallbackImpl of ISessionCallback<ContractState> {
+352 |         fn parse_authorization(
+353 |             self: @ContractState, authorization_signature: Span<felt252>
+354 |         ) -> Array<SignerSignature> {
+355 |             self.parse_signature_array(authorization_signature)
+356 |         }
+357 | 
+358 |         fn is_valid_authorizer(self: @ContractState, guid_or_address: felt252) -> bool {
+359 |             if self.multiple_owners.is_owner(guid_or_address) {
+360 |                 return true;
+361 |             }
+362 | 
+363 |             let address: Option<ContractAddress> = guid_or_address.try_into();
+364 |             match address {
+365 |                 Option::Some(address) => self.is_external_owner(address),
+366 |                 Option::None => false,
+367 |             }
+368 |         }
+369 | 
+370 |         fn verify_authorization(
+371 |             self: @ContractState,
+372 |             session_hash: felt252,
+373 |             authorization_signature: Span<SignerSignature>
+374 |         ) {
+375 |             assert(
+376 |                 self.is_valid_span_signature(session_hash, authorization_signature),
+377 |                 'session/invalid-account-sig'
+378 |             );
+379 |         }
+380 |     }
+381 | 
+382 |     impl IAssertOwnerImpl of IAssertOwner<ContractState> {
+383 |         fn assert_owner(self: @ContractState) {
+384 |             let caller = get_caller_address();
+385 |             assert(
+386 |                 caller == get_contract_address() || self.is_external_owner(caller),
+387 |                 'caller-not-owner'
+388 |             );
+389 |         }
+390 |     }
+391 | 
+392 |     impl OutsideExecutionCallbackImpl of IOutsideExecutionCallback<ContractState> {
+393 |         #[inline(always)]
+394 |         fn execute_from_outside_callback(
+395 |             ref self: ContractState,
+396 |             calls: Span<Call>,
+397 |             outside_execution_hash: felt252,
+398 |             signature: Span<felt252>,
+399 |         ) -> Array<Span<felt252>> {
+400 |             if self.session.is_session(signature) {
+401 |                 self.session.validate_session_serialized(signature, calls, outside_execution_hash);
+402 |             } else {
+403 |                 self
+404 |                     .assert_valid_calls_and_signature(
+405 |                         calls,
+406 |                         outside_execution_hash,
+407 |                         signature,
+408 |                         is_from_outside: true,
+409 |                         account_address: get_contract_address()
+410 |                     );
+411 |             }
+412 |             let retdata = execute_multicall(calls);
+413 |             self
+414 |                 .emit(
+415 |                     TransactionExecuted { hash: outside_execution_hash, response: retdata.span() }
+416 |                 );
+417 |             retdata
+418 |         }
+419 |     }
+420 | 
+421 |     #[abi(embed_v0)]
+422 |     impl UpgradeableImpl of IUpgradeable<ContractState> {
+423 |         fn upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+424 |             self.assert_owner();
+425 |             self.upgradeable.upgrade(new_class_hash);
+426 |         }
+427 |     }
+428 | 
+429 |     //
+430 |     // Internal
+431 |     //
+432 | 
+433 |     #[generate_trait]
+434 |     impl ContractInternalImpl of ContractInternalTrait {
+435 |         #[must_use]
+436 |         fn is_valid_span_signature(
+437 |             self: @ContractState, hash: felt252, signer_signatures: Span<SignerSignature>
+438 |         ) -> bool {
+439 |             assert(signer_signatures.len() <= 2, 'invalid-signature-length');
+440 |             self.is_valid_owner_signature(hash, *signer_signatures.at(0))
+441 |         }
+442 | 
+443 |         #[must_use]
+444 |         fn is_valid_owner_signature(
+445 |             self: @ContractState, hash: felt252, signer_signature: SignerSignature
+446 |         ) -> bool {
+447 |             let signer = signer_signature.signer().storage_value();
+448 |             if !self.is_owner(signer.into_guid()) {
+449 |                 return false;
+450 |             }
+451 |             return signer_signature.is_valid_signature(hash);
+452 |         }
+453 | 
+454 |         #[must_use]
+455 |         fn is_valid_session_typed_data_signature(
+456 |             self: @ContractState, hash: felt252, mut signature: Span<felt252>
+457 |         ) -> bool {
+458 |             // this function assumes revision `1`
+459 | 
+460 |             let detailed_typed_data_items: Array<DetailedTypedData> = Serde::deserialize(
+461 |                 ref signature
+462 |             )
+463 |                 .expect('invalid-signature-format');
+464 |             let session_token: SessionToken = Serde::deserialize(ref signature)
+465 |                 .expect('invalid-signature-format');
+466 |             assert(!detailed_typed_data_items.is_empty(), 'empty-typed-data-list');
+467 |             assert(signature.is_empty(), 'invalid-signature-length');
+468 | 
+469 |             // reusable parts for computing individual SNIP-12 hashes
+470 |             let snip_12_hasher = PoseidonTrait::new().update('StarkNet Message');
+471 |             let contract_address: felt252 = get_contract_address().into();
+472 | 
+473 |             // collect individual SNIP-12 hashes
+474 |             let mut message_hashes: Array<felt252> = array![];
+475 |             let mut typed_data_items: Array<TypedData> = array![];
+476 | 
+477 |             let mut items = detailed_typed_data_items.span();
+478 |             while let Option::Some(detailed_typed_data) = items.pop_front() {
+479 |                 // SNIP-12 message encoding
+480 |                 let mut snip_12_message_hasher = PoseidonTrait::new()
+481 |                     .update(*detailed_typed_data.type_hash);
+482 |                 let mut params_span = detailed_typed_data.params.clone();
+483 |                 while let Option::Some(param_item) = params_span.pop_front() {
+484 |                     snip_12_message_hasher = snip_12_message_hasher.update(*param_item);
+485 |                 };
+486 | 
+487 |                 // SNIP-12's `message` component; also used as `typed_data_hash` internally
+488 |                 let message_hash = snip_12_message_hasher.finalize();
+489 | 
+490 |                 message_hashes
+491 |                     .append(
+492 |                         snip_12_hasher
+493 |                             .update(*detailed_typed_data.domain_hash)
+494 |                             .update(contract_address)
+495 |                             .update(message_hash)
+496 |                             .finalize()
+497 |                     );
+498 | 
+499 |                 let (scope_hash, _, _) = hades_permutation(
+500 |                     *detailed_typed_data.domain_hash, *detailed_typed_data.type_hash, 2
+501 |                 );
+502 |                 typed_data_items.append(TypedData { scope_hash, typed_data_hash: message_hash });
+503 |             };
+504 | 
+505 |             let message_hash = if message_hashes.len() == 1 {
+506 |                 // compatible with SNIP-12
+507 |                 *message_hashes[0]
+508 |             } else {
+509 |                 // custom extension to SNIP-12 for multiple messages
+510 |                 poseidon_hash_span(message_hashes.span())
+511 |             };
+512 | 
+513 |             assert(message_hash == hash, 'message-hash-mismatch');
+514 | 
+515 |             self.is_session_signature_valid(typed_data_items.span(), session_token)
+516 |         }
+517 | 
+518 |         #[inline(always)]
+519 |         fn parse_signature_array(
+520 |             self: @ContractState, mut signatures: Span<felt252>
+521 |         ) -> Array<SignerSignature> {
+522 |             // manual inlining instead of calling full_deserialize for performance
+523 |             let deserialized: Array<SignerSignature> = Serde::deserialize(ref signatures)
+524 |                 .expect('invalid-signature-format');
+525 |             assert(signatures.is_empty(), 'invalid-signature-length');
+526 |             deserialized
+527 |         }
+528 | 
+529 |         fn assert_valid_span_signature(
+530 |             self: @ContractState, hash: felt252, signer_signatures: Array<SignerSignature>
+531 |         ) {
+532 |             assert(signer_signatures.len() <= 2, 'invalid-signature-length');
+533 |             assert(
+534 |                 self.is_valid_owner_signature(hash, *signer_signatures.at(0)), 'invalid-owner-sig'
+535 |             );
+536 |         }
+537 | 
+538 |         fn assert_valid_calls_and_signature(
+539 |             ref self: ContractState,
+540 |             calls: Span<Call>,
+541 |             execution_hash: felt252,
+542 |             mut signatures: Span<felt252>,
+543 |             is_from_outside: bool,
+544 |             account_address: ContractAddress,
+545 |         ) {
+546 |             let signer_signatures: Array<SignerSignature> = self.parse_signature_array(signatures);
+547 |             self.assert_valid_span_signature(execution_hash, signer_signatures);
+548 |         }
+549 |     }
+550 | }
+551 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/asserts.cairo:
+--------------------------------------------------------------------------------
+ 1 | const DECLARE_SELECTOR: felt252 = selector!("__declare_transaction__");
+ 2 | 
+ 3 | use starknet::{ContractAddress, account::Call};
+ 4 | 
+ 5 | fn assert_no_self_call(mut calls: Span<Call>, self: ContractAddress) {
+ 6 |     while let Option::Some(call) = calls
+ 7 |         .pop_front() {
+ 8 |             if *call.selector != DECLARE_SELECTOR {
+ 9 |                 assert(*call.to != self, 'argent/no-multicall-to-self')
+10 |             }
+11 |         }
+12 | }
+13 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/delegate_account/delegate_account.cairo:
+--------------------------------------------------------------------------------
+ 1 | #[starknet::component]
+ 2 | mod delegate_account_component {
+ 3 |     use controller::delegate_account::interface::IDelegateAccount;
+ 4 |     use controller::account::IAssertOwner;
+ 5 | 
+ 6 |     use starknet::{get_caller_address, ContractAddress};
+ 7 | 
+ 8 |     #[storage]
+ 9 |     struct Storage {
+10 |         delegate_account: ContractAddress,
+11 |     }
+12 | 
+13 |     #[event]
+14 |     #[derive(Drop, starknet::Event)]
+15 |     enum Event {
+16 |         DelegateAccountChanged: DelegateAccountChanged,
+17 |     }
+18 | 
+19 |     #[derive(Drop, starknet::Event)]
+20 |     struct DelegateAccountChanged {
+21 |         address: ContractAddress,
+22 |     }
+23 | 
+24 |     #[embeddable_as(DelegateAccountImpl)]
+25 |     impl ImplDelegateAccount<
+26 |         TContractState,
+27 |         +HasComponent<TContractState>,
+28 |         +IAssertOwner<TContractState>,
+29 |         +Drop<TContractState>
+30 |     > of IDelegateAccount<ComponentState<TContractState>> {
+31 |         fn set_delegate_account(
+32 |             ref self: ComponentState<TContractState>, delegate_address: ContractAddress
+33 |         ) {
+34 |             self.get_contract().assert_owner();
+35 | 
+36 |             self.delegate_account.write(delegate_address.into());
+37 |             self.emit(DelegateAccountChanged { address: delegate_address });
+38 |         }
+39 | 
+40 |         fn delegate_account(self: @ComponentState<TContractState>) -> ContractAddress {
+41 |             self.delegate_account.read()
+42 |         }
+43 |     }
+44 | }
+45 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/delegate_account/interface.cairo:
+--------------------------------------------------------------------------------
+ 1 | use starknet::ContractAddress;
+ 2 | 
+ 3 | const SRC5_DELEGATE_ACCOUNT_INTERFACE_ID: felt252 =
+ 4 |     0x406350870d0cf6ca3332d174788fdcfa803e21633b124b746629775b9a294c;
+ 5 | 
+ 6 | #[starknet::interface]
+ 7 | trait IDelegateAccount<TContractState> {
+ 8 |     fn set_delegate_account(ref self: TContractState, delegate_address: ContractAddress);
+ 9 |     fn delegate_account(self: @TContractState) -> ContractAddress;
+10 | }
+11 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/external_owners/external_owners.cairo:
+--------------------------------------------------------------------------------
+ 1 | #[starknet::component]
+ 2 | mod external_owners_component {
+ 3 |     use starknet::{get_caller_address, get_contract_address, ContractAddress, storage::Map};
+ 4 | 
+ 5 |     use controller::external_owners::interface::IExternalOwners;
+ 6 |     use controller::account::IAssertOwner;
+ 7 | 
+ 8 |     #[storage]
+ 9 |     struct Storage {
+10 |         external_owners: Map<felt252, bool>,
+11 |     }
+12 | 
+13 |     #[event]
+14 |     #[derive(Drop, starknet::Event)]
+15 |     enum Event {
+16 |         ExternalOwnerRegistered: ExternalOwnerRegistered,
+17 |         ExternalOwnerRemoved: ExternalOwnerRemoved,
+18 |     }
+19 | 
+20 |     #[derive(Drop, starknet::Event)]
+21 |     struct ExternalOwnerRegistered {
+22 |         address: ContractAddress,
+23 |     }
+24 | 
+25 |     #[derive(Drop, starknet::Event)]
+26 |     struct ExternalOwnerRemoved {
+27 |         address: ContractAddress,
+28 |     }
+29 | 
+30 |     #[embeddable_as(ExternalOwnersImpl)]
+31 |     impl ImplExternalOwners<
+32 |         TContractState,
+33 |         +HasComponent<TContractState>,
+34 |         +IAssertOwner<TContractState>,
+35 |         +Drop<TContractState>
+36 |     > of IExternalOwners<ComponentState<TContractState>> {
+37 |         fn register_external_owner(
+38 |             ref self: ComponentState<TContractState>, external_owner_address: ContractAddress
+39 |         ) {
+40 |             self.get_contract().assert_owner();
+41 |             self._register_external_owner(external_owner_address);
+42 |         }
+43 | 
+44 |         fn remove_external_owner(
+45 |             ref self: ComponentState<TContractState>, external_owner_address: ContractAddress
+46 |         ) {
+47 |             self.get_contract().assert_owner();
+48 | 
+49 |             assert(
+50 |                 self.is_external_owner(external_owner_address),
+51 |                 'ext-owners/not-registered'
+52 |             );
+53 | 
+54 |             self.external_owners.write(external_owner_address.into(), false);
+55 |             self.emit(ExternalOwnerRemoved { address: external_owner_address });
+56 |         }
+57 | 
+58 |         fn is_external_owner(
+59 |             self: @ComponentState<TContractState>, external_owner_address: ContractAddress
+60 |         ) -> bool {
+61 |             self.external_owners.read(external_owner_address.into())
+62 |         }
+63 |     }
+64 | 
+65 |     #[generate_trait]
+66 |     impl InternalImpl<
+67 |         TContractState,
+68 |         +HasComponent<TContractState>,
+69 |         +IAssertOwner<TContractState>,
+70 |         +Drop<TContractState>
+71 |     > of InternalTrait<TContractState> {
+72 |         fn _register_external_owner(
+73 |             ref self: ComponentState<TContractState>, external_owner_address: ContractAddress
+74 |         ) {
+75 |             assert(
+76 |                 self.is_external_owner(external_owner_address) == false,
+77 |                 'ext-owners/already-registered'
+78 |             );
+79 | 
+80 |             self.external_owners.write(external_owner_address.into(), true);
+81 |             self.emit(ExternalOwnerRegistered { address: external_owner_address });
+82 |         }
+83 |     }
+84 | }
+85 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/external_owners/interface.cairo:
+--------------------------------------------------------------------------------
+ 1 | use starknet::ContractAddress;
+ 2 | 
+ 3 | const SRC5_EXTERNAL_OWNERS_INTERFACE_ID: felt252 =
+ 4 |     0x24c5ac715771a02a2069470c06dfd8e80af7cd6b2d2e47698ccac4a4a4aa437;
+ 5 | 
+ 6 | #[starknet::interface]
+ 7 | trait IExternalOwners<TContractState> {
+ 8 |     fn register_external_owner(ref self: TContractState, external_owner_address: ContractAddress);
+ 9 |     fn remove_external_owner(ref self: TContractState, external_owner_address: ContractAddress);
+10 |     fn is_external_owner(self: @TContractState, external_owner_address: ContractAddress) -> bool;
+11 | }
+12 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/introspection/interface.cairo:
+--------------------------------------------------------------------------------
+ 1 | const SRC5_INTERFACE_ID: felt252 = 0x3f918d17e5ee77373b56385708f855659a07f75997f365cf87748628532a055;
+ 2 | const SRC5_INTERFACE_ID_OLD: felt252 = 0x01ffc9a7;
+ 3 | 
+ 4 | #[starknet::interface]
+ 5 | trait ISRC5<TContractState> {
+ 6 |     fn supports_interface(self: @TContractState, interface_id: felt252) -> bool;
+ 7 | }
+ 8 | 
+ 9 | #[starknet::interface]
+10 | trait ISRC5Legacy<TContractState> {
+11 |     fn supportsInterface(self: @TContractState, interfaceId: felt252) -> felt252;
+12 | }
+13 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/introspection/src5.cairo:
+--------------------------------------------------------------------------------
+ 1 | #[starknet::component]
+ 2 | mod src5_component {
+ 3 |     use argent::account::interface::{
+ 4 |         SRC5_ACCOUNT_INTERFACE_ID, SRC5_ACCOUNT_INTERFACE_ID_OLD_1, SRC5_ACCOUNT_INTERFACE_ID_OLD_2
+ 5 |     };
+ 6 |     use argent::introspection::interface::{ISRC5, ISRC5Legacy};
+ 7 |     use argent::introspection::interface::{SRC5_INTERFACE_ID, SRC5_INTERFACE_ID_OLD};
+ 8 |     use argent::outside_execution::interface::{ERC165_OUTSIDE_EXECUTION_INTERFACE_ID_REV_2};
+ 9 | 
+10 |     use controller::delegate_account::interface::SRC5_DELEGATE_ACCOUNT_INTERFACE_ID;
+11 |     use controller::external_owners::interface::SRC5_EXTERNAL_OWNERS_INTERFACE_ID;
+12 | 
+13 |     #[storage]
+14 |     struct Storage {}
+15 | 
+16 |     #[embeddable_as(SRC5Impl)]
+17 |     impl SRC5<
+18 |         TContractState, +HasComponent<TContractState>
+19 |     > of ISRC5<ComponentState<TContractState>> {
+20 |         fn supports_interface(
+21 |             self: @ComponentState<TContractState>, interface_id: felt252
+22 |         ) -> bool {
+23 |             if interface_id == SRC5_INTERFACE_ID {
+24 |                 true
+25 |             } else if interface_id == SRC5_ACCOUNT_INTERFACE_ID {
+26 |                 true
+27 |             } else if interface_id == ERC165_OUTSIDE_EXECUTION_INTERFACE_ID_REV_2 {
+28 |                 true
+29 |             } else if interface_id == SRC5_INTERFACE_ID_OLD {
+30 |                 true
+31 |             } else if interface_id == SRC5_ACCOUNT_INTERFACE_ID_OLD_1 {
+32 |                 true
+33 |             } else if interface_id == SRC5_ACCOUNT_INTERFACE_ID_OLD_2 {
+34 |                 true
+35 |             } else if interface_id == SRC5_DELEGATE_ACCOUNT_INTERFACE_ID {
+36 |                 true
+37 |             } else if interface_id == SRC5_EXTERNAL_OWNERS_INTERFACE_ID {
+38 |                 true
+39 |             } else {
+40 |                 false
+41 |             }
+42 |         }
+43 |     }
+44 | 
+45 |     #[embeddable_as(SRC5LegacyImpl)]
+46 |     impl SRC5Legacy<
+47 |         TContractState, +HasComponent<TContractState>
+48 |     > of ISRC5Legacy<ComponentState<TContractState>> {
+49 |         fn supportsInterface(
+50 |             self: @ComponentState<TContractState>, interfaceId: felt252
+51 |         ) -> felt252 {
+52 |             if self.supports_interface(interfaceId) {
+53 |                 1
+54 |             } else {
+55 |                 0
+56 |             }
+57 |         }
+58 |     }
+59 | }
+60 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/lib.cairo:
+--------------------------------------------------------------------------------
+ 1 | mod account;
+ 2 | mod delegate_account {
+ 3 |     mod delegate_account;
+ 4 |     mod interface;
+ 5 | }
+ 6 | mod external_owners {
+ 7 |     mod external_owners;
+ 8 |     mod interface;
+ 9 | }
+10 | mod introspection {
+11 |     mod interface;
+12 |     mod src5;
+13 | }
+14 | mod session {
+15 |     mod interface;
+16 |     mod session;
+17 | }
+18 | mod multiple_owners {
+19 |     mod multiple_owners;
+20 |     mod interface;
+21 | }
+22 | mod asserts;
+23 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/multiple_owners/interface.cairo:
+--------------------------------------------------------------------------------
+ 1 | use starknet::ContractAddress;
+ 2 | use argent::signer::{
+ 3 |     signer_signature::{
+ 4 |         Signer, SignerStorageValue, SignerType, StarknetSigner, StarknetSignature, SignerTrait,
+ 5 |         SignerStorageTrait, SignerSignature, SignerSignatureTrait, starknet_signer_from_pubkey
+ 6 |     }
+ 7 | };
+ 8 | 
+ 9 | #[starknet::interface]
+10 | trait IMultipleOwners<TContractState> {
+11 |     fn add_owner(ref self: TContractState, owner: Signer, signature: SignerSignature);
+12 |     fn remove_owner(ref self: TContractState, owner: Signer);
+13 |     fn is_owner(self: @TContractState, owner_guid: felt252) -> bool;
+14 |     fn assert_valid_owner_signature(self: @TContractState, signer_signature: SignerSignature);
+15 | }
+16 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/multiple_owners/multiple_owners.cairo:
+--------------------------------------------------------------------------------
+ 1 | #[starknet::component]
+ 2 | mod multiple_owners_component {
+ 3 |     use core::poseidon::poseidon_hash_span;
+ 4 |     use hash::HashStateTrait;
+ 5 |     use starknet::info::{get_caller_address, get_tx_info};
+ 6 |     use starknet::{ContractAddress, get_contract_address, storage::Map};
+ 7 |     use argent::signer::{
+ 8 |         signer_signature::{
+ 9 |             Signer, SignerStorageValue, SignerType, StarknetSigner, StarknetSignature, SignerTrait,
+10 |             SignerStorageTrait, SignerSignature, SignerSignatureTrait, starknet_signer_from_pubkey
+11 |         }
+12 |     };
+13 | 
+14 |     use controller::multiple_owners::interface::IMultipleOwners;
+15 |     use controller::account::IAssertOwner;
+16 | 
+17 |     #[storage]
+18 |     struct Storage {
+19 |         owners: Map<felt252, bool>,
+20 |     }
+21 | 
+22 |     #[event]
+23 |     #[derive(Drop, starknet::Event)]
+24 |     enum Event {
+25 |         OwnerAdded: OwnerAdded,
+26 |         OwnerRemoved: OwnerRemoved,
+27 |     }
+28 | 
+29 |     #[derive(Drop, starknet::Event)]
+30 |     struct OwnerAdded {
+31 |         owner: Signer,
+32 |     }
+33 | 
+34 |     #[derive(Drop, starknet::Event)]
+35 |     struct OwnerRemoved {
+36 |         owner: Signer,
+37 |     }
+38 | 
+39 |     #[embeddable_as(MultipleOwnersImpl)]
+40 |     impl ImplMultipleOwners<
+41 |         TContractState,
+42 |         +HasComponent<TContractState>,
+43 |         +IAssertOwner<TContractState>,
+44 |         +Drop<TContractState>
+45 |     > of IMultipleOwners<ComponentState<TContractState>> {
+46 |         fn add_owner(
+47 |             ref self: ComponentState<TContractState>, owner: Signer, signature: SignerSignature
+48 |         ) {
+49 |             self.get_contract().assert_owner();
+50 |             self.assert_valid_owner_signature(signature);
+51 | 
+52 |             self.owners.write(owner.into_guid(), true);
+53 |             self.emit(OwnerAdded { owner });
+54 |         }
+55 | 
+56 |         fn remove_owner(ref self: ComponentState<TContractState>, owner: Signer) {
+57 |             self.get_contract().assert_owner();
+58 | 
+59 |             self.owners.write(owner.into_guid(), false);
+60 |             self.emit(OwnerRemoved { owner });
+61 |         }
+62 | 
+63 |         fn is_owner(self: @ComponentState<TContractState>, owner_guid: felt252) -> bool {
+64 |             self.owners.read(owner_guid)
+65 |         }
+66 | 
+67 |         fn assert_valid_owner_signature(
+68 |             self: @ComponentState<TContractState>, signer_signature: SignerSignature,
+69 |         ) {
+70 |             // We now need to hash message_hash with the size of the array: (add_owner selector,
+71 |             // chain id, contract address)
+72 |             // https://github.com/starkware-libs/cairo-lang/blob/b614d1867c64f3fb2cf4a4879348cfcf87c3a5a7/src/starkware/cairo/common/hash_state.py#L6
+73 |             let message_hash = poseidon_hash_span(
+74 |                 array![
+75 |                     selector!("add_owner"),
+76 |                     get_tx_info().unbox().chain_id,
+77 |                     get_contract_address().into()
+78 |                 ]
+79 |                     .span()
+80 |             );
+81 | 
+82 |             assert(signer_signature.is_valid_signature(message_hash), 'invalid-owner-sig');
+83 |         }
+84 |     }
+85 | }
+86 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/session/interface.cairo:
+--------------------------------------------------------------------------------
+ 1 | use starknet::account::Call;
+ 2 | use argent::signer::signer_signature::{SignerSignature, Signer};
+ 3 | use argent::session::interface::{Session, TypedData, SessionToken};
+ 4 | 
+ 5 | 
+ 6 | #[derive(Drop, Serde, Copy, PartialEq)]
+ 7 | enum SessionState {
+ 8 |     NotRegistered,
+ 9 |     Revoked,
+10 |     Validated: felt252,
+11 | }
+12 | 
+13 | #[generate_trait]
+14 | impl SessionStateImpl of SessionStateTrait {
+15 |     fn from_felt(felt: felt252) -> SessionState {
+16 |         match felt {
+17 |             0 => SessionState::NotRegistered,
+18 |             1 => SessionState::Revoked,
+19 |             _ => SessionState::Validated(felt),
+20 |         }
+21 |     }
+22 |     fn into_felt(self: SessionState) -> felt252 {
+23 |         match self {
+24 |             SessionState::NotRegistered => 0,
+25 |             SessionState::Revoked => 1,
+26 |             SessionState::Validated(hash) => hash,
+27 |         }
+28 |     }
+29 | }
+30 | 
+31 | #[starknet::interface]
+32 | trait ISession<TContractState> {
+33 |     fn revoke_session(ref self: TContractState, session_hash: felt252);
+34 |     fn register_session(ref self: TContractState, session: Session, guid_or_address: felt252,);
+35 |     fn is_session_revoked(self: @TContractState, session_hash: felt252) -> bool;
+36 |     fn is_session_registered(
+37 |         self: @TContractState, session_hash: felt252, guid_or_address: felt252,
+38 |     ) -> bool;
+39 |     fn is_session_signature_valid(self: @TContractState, data: Span<TypedData>, token: SessionToken) -> bool;
+40 | }
+41 | 
+42 | #[starknet::interface]
+43 | trait ISessionCallback<TContractState> {
+44 |     fn parse_authorization(
+45 |         self: @TContractState, authorization_signature: Span<felt252>
+46 |     ) -> Array<SignerSignature>;
+47 |     fn is_valid_authorizer(self: @TContractState, guid_or_address: felt252) -> bool;
+48 |     fn verify_authorization(
+49 |         self: @TContractState, session_hash: felt252, authorization_signature: Span<SignerSignature>
+50 |     );
+51 | }
+52 | 
+53 | 
+
+
+--------------------------------------------------------------------------------
+/packages/contracts/controller/src/session/session.cairo:
+--------------------------------------------------------------------------------
+  1 | use starknet::account::Call;
+  2 | use core::array::ArrayTrait;
+  3 | use alexandria_merkle_tree::merkle_tree::{
+  4 |     Hasher, MerkleTree, poseidon::PoseidonHasherImpl, MerkleTreeTrait
+  5 | };
+  6 | use argent::session::{session_hash::MerkleLeafHashPolicy, interface::Policy};
+  7 | 
+  8 | // Based on
+  9 | // https://github.com/argentlabs/starknet-plugin-account/blob/3c14770c3f7734ef208536d91bbd76af56dc2043/contracts/plugins/SessionKey.cairo
+ 10 | #[starknet::component]
+ 11 | mod session_component {
+ 12 |     use core::poseidon::{hades_permutation, poseidon_hash_span};
+ 13 |     use starknet::{account::Call, info::get_block_timestamp, get_contract_address, storage::Map};
+ 14 |     use argent::session::interface::{Session, SessionToken, Policy, TypedData};
+ 15 |     use argent::session::session_hash::{
+ 16 |         StructHashSession, OffChainMessageHashSessionRev1, StructHashTypedData
+ 17 |     };
+ 18 |     use argent::signer::signer_signature::{
+ 19 |         Signer, SignerSignature, SignerType, SignerSignatureImpl, SignerTraitImpl
+ 20 |     };
+ 21 | 
+ 22 |     use controller::asserts::assert_no_self_call;
+ 23 |     use controller::session::interface::{ISession, ISessionCallback};
+ 24 |     use controller::session::session::check_policy;
+ 25 |     use controller::account::IAssertOwner;
+ 26 | 
+ 27 |     const SESSION_MAGIC: felt252 = 'session-token';
+ 28 |     const AUTHORIZATION_BY_REGISTERED: felt252 = 'authorization-by-registered';
+ 29 | 
+ 30 |     #[storage]
+ 31 |     struct Storage {
+ 32 |         /// A map of session hashes to a boolean indicating if the session has been revoked.
+ 33 |         revoked_session: Map<felt252, bool>,
+ 34 |         /// A map of (owner_guid, session_hash) to a len of authorization signature
+ 35 |         valid_session_cache: Map<(felt252, felt252), bool>,
+ 36 |     }
+ 37 | 
+ 38 |     #[event]
+ 39 |     #[derive(Drop, starknet::Event)]
+ 40 |     enum Event {
+ 41 |         SessionRevoked: SessionRevoked,
+ 42 |         SessionRegistered: SessionRegistered,
+ 43 |     }
+ 44 | 
+ 45 |     #[derive(Drop, starknet::Event)]
+ 46 |     struct SessionRevoked {
+ 47 |         session_hash: felt252,
+ 48 |     }
+ 49 | 
+ 50 |     #[derive(Drop, starknet::Event)]
+ 51 |     struct SessionRegistered {
+ 52 |         session_hash: felt252,
+ 53 |     }
+ 54 | 
+ 55 |     mod Errors {
+ 56 |         const LENGHT_MISMATCH: felt252 = 'Length of proofs mismatched';
+ 57 |         const SESSION_EXPIRED: felt252 = 'Session expired';
+ 58 |         const SESSION_REVOKED: felt252 = 'Session has been revoked';
+ 59 |         const SESSION_SIGNATURE_INVALID: felt252 = 'Session signature is invalid';
+ 60 |         const SESSION_TOKEN_INVALID: felt252 = 'Session token not a valid sig';
+ 61 |         const POLICY_CHECK_FAILED: felt252 = 'Policy invalid for given calls';
+ 62 |     }
+ 63 | 
+ 64 |     #[embeddable_as(SessionComponent)]
+ 65 |     impl SessionImpl<
+ 66 |         TContractState,
+ 67 |         +HasComponent<TContractState>,
+ 68 |         +ISessionCallback<TContractState>,
+ 69 |         +IAssertOwner<TContractState>,
+ 70 |     > of ISession<ComponentState<TContractState>> {
+ 71 |         fn revoke_session(ref self: ComponentState<TContractState>, session_hash: felt252) {
+ 72 |             self.get_contract().assert_owner();
+ 73 | 
+ 74 |             assert(!self.revoked_session.read(session_hash), 'session/already-revoked');
+ 75 |             self.emit(SessionRevoked { session_hash });
+ 76 |             self.revoked_session.write(session_hash, true);
+ 77 |         }
+ 78 | 
+ 79 |         fn register_session(
+ 80 |             ref self: ComponentState<TContractState>, session: Session, guid_or_address: felt252,
+ 81 |         ) {
+ 82 |             let contract = self.get_contract();
+ 83 |             contract.assert_owner();
+ 84 | 
+ 85 |             let now = get_block_timestamp();
+ 86 |             assert(session.expires_at > now, 'session/expired');
+ 87 | 
+ 88 |             let session_hash = session.get_message_hash_rev_1();
+ 89 |             assert(!self.revoked_session.read(session_hash), 'session/already-revoked');
+ 90 |             assert(
+ 91 |                 !self.valid_session_cache.read((guid_or_address, session_hash)),
+ 92 |                 'session/already-registered'
+ 93 |             );
+ 94 | 
+ 95 |             self.valid_session_cache.write((guid_or_address, session_hash), true);
+ 96 |         }
+ 97 | 
+ 98 |         fn is_session_revoked(
+ 99 |             self: @ComponentState<TContractState>, session_hash: felt252
+100 |         ) -> bool {
+101 |             self.revoked_session.read(session_hash)
+102 |         }
+103 | 
+104 |         fn is_session_registered(
+105 |             self: @ComponentState<TContractState>, session_hash: felt252, guid_or_address: felt252,
+106 |         ) -> bool {
+107 |             if self.is_session_revoked(session_hash) {
+108 |                 return false;
+109 |             }
+110 | 
+111 |             self.valid_session_cache.read((guid_or_address, session_hash))
+112 |         }
+113 |         fn is_session_signature_valid(
+114 |             self: @ComponentState<TContractState>, data: Span<TypedData>, token: SessionToken
+115 |         ) -> bool {
+116 |             let mut data = data;
+117 |             let mut policies: Array<Policy> = array![];
+118 |             let mut hashes: Array<felt252> = array![];
+119 |             while let Option::Some(d) = data.pop_front() {
+120 |                 hashes.append(d.get_struct_hash_rev_1());
+121 |                 let policy = Policy::TypedData(*d);
+122 | 
+123 |                 policies.append(policy);
+124 |             };
+125 |             let hash = poseidon_hash_span(hashes.span());
+126 |             let policies = policies.span();
+127 | 
+128 |             let _ = self.assert_validate_policy_signature(token, policies, hash);
+129 |             true
+130 |         }
+131 |     }
+132 | 
+133 |     #[generate_trait]
+134 |     impl InternalImpl<
+135 |         TContractState, +HasComponent<TContractState>, +ISessionCallback<TContractState>,
+136 |     > of InternalTrait<TContractState> {
+137 |         fn validate_session_serialized(
+138 |             ref self: ComponentState<TContractState>,
+139 |             mut signature: Span<felt252>,
+140 |             calls: Span<Call>,
+141 |             transaction_hash: felt252,
+142 |         ) -> felt252 {
+143 |             assert(self.is_session(signature), 'session/invalid-magic-value');
+144 |             assert_no_self_call(calls, get_contract_address());
+145 | 
+146 |             let mut signature = signature.slice(1, signature.len() - 1);
+147 |             let signature: SessionToken = Serde::<SessionToken>::deserialize(ref signature)
+148 |                 .expect('session/deserialize-error');
+149 | 
+150 |             self.validate_signature(signature, calls, transaction_hash);
+151 |             starknet::VALIDATED
+152 |         }
+153 | 
+154 |         #[inline(always)]
+155 |         fn is_session(self: @ComponentState<TContractState>, signature: Span<felt252>) -> bool {
+156 |             match signature.get(0) {
+157 |                 Option::Some(session_magic) => *session_magic.unbox() == SESSION_MAGIC,
+158 |                 Option::None => false
+159 |             }
+160 |         }
+161 | 
+162 |         fn validate_signature(
+163 |             ref self: ComponentState<TContractState>,
+164 |             signature: SessionToken,
+165 |             calls: Span<Call>,
+166 |             transaction_hash: felt252,
+167 |         ) {
+168 |             let mut calls = calls;
+169 |             let mut policies: Array<Policy> = array![];
+170 |             while let Option::Some(call) = calls.pop_front() {
+171 |                 policies.append(Policy::Call(*call));
+172 |             };
+173 |             let policies = policies.span();
+174 |             if let Option::Some(cached) = self
+175 |                 .assert_validate_policy_signature(signature, policies, transaction_hash) {
+176 |                 self.valid_session_cache.write(cached, true);
+177 |             };
+178 |         }
+179 | 
+180 |         fn assert_validate_policy_signature(
+181 |             self: @ComponentState<TContractState>,
+182 |             signature: SessionToken,
+183 |             calls: Span<Policy>,
+184 |             transaction_hash: felt252,
+185 |         ) -> Option<(felt252, felt252)> {
+186 |             let contract = self.get_contract();
+187 |             assert(signature.proofs.len() == calls.len(), 'session/length-mismatch');
+188 | 
+189 |             let now = get_block_timestamp();
+190 |             assert(signature.session.expires_at > now, 'session/expired');
+191 | 
+192 |             // check validity of token
+193 |             let session_hash = signature.session.get_message_hash_rev_1();
+194 | 
+195 |             let mut to_be_cached = Option::None;
+196 | 
+197 |             assert(!self.revoked_session.read(session_hash), 'session/already-revoked');
+198 | 
+199 |             if (signature.session_authorization.len() == 2
+200 |                 && *signature.session_authorization.at(0) == AUTHORIZATION_BY_REGISTERED) {
+201 |                 let owner_guid = *signature.session_authorization.at(1);
+202 |                 assert(contract.is_valid_authorizer(owner_guid), 'session/invalid-authorizer');
+203 |                 assert(signature.cache_authorization, 'session/cache-missing');
+204 | 
+205 |                 assert(
+206 |                     self.valid_session_cache.read((owner_guid, session_hash)),
+207 |                     'session/not-registered'
+208 |                 );
+209 |             } else {
+210 |                 let parsed = contract.parse_authorization(signature.session_authorization);
+211 |                 let owner_guid = parsed.at(0).clone().signer().into_guid();
+212 | 
+213 |                 // check validity of token
+214 |                 if !signature.cache_authorization
+215 |                     || !self.valid_session_cache.read((owner_guid, session_hash)) {
+216 |                     contract.verify_authorization(session_hash, parsed.span());
+217 | 
+218 |                     if signature.cache_authorization {
+219 |                         to_be_cached = Option::Some((owner_guid, session_hash));
+220 |                     }
+221 |                 } else {
+222 |                     assert(contract.is_valid_authorizer(owner_guid), 'session/invalid-authorizer');
+223 |                 }
+224 |             };
+225 | 
+226 |             let (message_hash, _, _) = hades_permutation(transaction_hash, session_hash, 2);
+227 | 
+228 |             let session_guid_from_sig = signature.session_signature.signer().into_guid();
+229 | 
+230 |             assert(
+231 |                 signature.session.session_key_guid == session_guid_from_sig,
+232 |                 'session/session-key-mismatch'
+233 |             );
+234 | 
+235 |             assert(
+236 |                 signature.session_signature.is_valid_signature(message_hash),
+237 |                 'session/invalid-session-sig'
+238 |             );
+239 | 
+240 |             if signature.session.guardian_key_guid != 0 {
+241 |                 assert(
+242 |                     signature
+243 |                         .session
+244 |                         .guardian_key_guid == signature
+245 |                         .guardian_signature
+246 |                         .signer()
+247 |                         .into_guid(),
+248 |                     'session/invalid-guardian'
+249 |                 );
+250 | 
+251 |                 assert(
+252 |                     signature.guardian_signature.is_valid_signature(message_hash),
+253 |                     'session/invalid-guardian-sig'
+254 |                 );
+255 |             }
+256 | 
+257 |             assert(
+258 |                 check_policy(calls, signature.session.allowed_policies_root, signature.proofs),
+259 |                 'session/policy-check-failed'
+260 |             );
+261 | 
+262 |             to_be_cached
+263 |         }
+264 |     }
+265 | }
+266 | 
+267 | fn check_policy(array: Span<Policy>, root: felt252, proofs: Span<Span<felt252>>,) -> bool {
+268 |     let mut i = 0_usize;
+269 |     loop {
+270 |         if i >= array.len() {
+271 |             break true;
+272 |         }
+273 |         let leaf = array.at(i).get_merkle_leaf();
+274 |         let mut merkle: MerkleTree<Hasher> = MerkleTreeTrait::new();
+275 | 
+276 |         if merkle.verify(root, leaf, *proofs.at(i)) == false {
+277 |             break false;
+278 |         };
+279 |         i += 1;
+280 |     }
+281 | }
+282 | 
