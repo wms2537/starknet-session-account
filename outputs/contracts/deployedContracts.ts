@@ -7,7 +7,7 @@ const deployedContracts = {
   devnet: {
     NexAccount: {
       address:
-        "0x49481bfcbe1e390889c67d793e851ee33166bc0feed54db684f6501539bed57",
+        "0x816d8e1050435c0d521b501f0a345ece128d1e24106aebb897c4e8a028a0a8",
       abi: [
         {
           type: "impl",
@@ -177,24 +177,6 @@ const deployedContracts = {
           ],
         },
         {
-          type: "struct",
-          name: "contracts::interfaces::session_key::Session",
-          members: [
-            {
-              name: "public_key",
-              type: "core::felt252",
-            },
-            {
-              name: "expires_at",
-              type: "core::integer::u64",
-            },
-            {
-              name: "metadata",
-              type: "core::byte_array::ByteArray",
-            },
-          ],
-        },
-        {
           type: "enum",
           name: "core::bool",
           variants: [
@@ -209,12 +191,116 @@ const deployedContracts = {
           ],
         },
         {
+          type: "struct",
+          name: "contracts::interfaces::session_key::SessionData",
+          members: [
+            {
+              name: "public_key",
+              type: "core::felt252",
+            },
+            {
+              name: "expires_at",
+              type: "core::integer::u64",
+            },
+            {
+              name: "metadata",
+              type: "core::byte_array::ByteArray",
+            },
+            {
+              name: "is_revoked",
+              type: "core::bool",
+            },
+          ],
+        },
+        {
           type: "enum",
-          name: "core::option::Option::<contracts::interfaces::session_key::Session>",
+          name: "contracts::interfaces::permission::AccessMode",
+          variants: [
+            {
+              name: "Whitelist",
+              type: "()",
+            },
+            {
+              name: "Blacklist",
+              type: "()",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "contracts::interfaces::permission::PermissionResult",
+          members: [
+            {
+              name: "mode",
+              type: "contracts::interfaces::permission::AccessMode",
+            },
+            {
+              name: "contract",
+              type: "core::starknet::contract_address::ContractAddress",
+            },
+            {
+              name: "selectors",
+              type: "core::array::Array::<core::felt252>",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "core::integer::u256",
+          members: [
+            {
+              name: "low",
+              type: "core::integer::u128",
+            },
+            {
+              name: "high",
+              type: "core::integer::u128",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "contracts::interfaces::policy::PolicyResult",
+          members: [
+            {
+              name: "contract",
+              type: "core::starknet::contract_address::ContractAddress",
+            },
+            {
+              name: "max_amount",
+              type: "core::integer::u256",
+            },
+            {
+              name: "current_amount",
+              type: "core::integer::u256",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "contracts::interfaces::session_key::SessionResult",
+          members: [
+            {
+              name: "data",
+              type: "contracts::interfaces::session_key::SessionData",
+            },
+            {
+              name: "permissions",
+              type: "core::array::Array::<contracts::interfaces::permission::PermissionResult>",
+            },
+            {
+              name: "policies",
+              type: "core::array::Array::<contracts::interfaces::policy::PolicyResult>",
+            },
+          ],
+        },
+        {
+          type: "enum",
+          name: "core::option::Option::<contracts::interfaces::session_key::SessionResult>",
           variants: [
             {
               name: "Some",
-              type: "contracts::interfaces::session_key::Session",
+              type: "contracts::interfaces::session_key::SessionResult",
             },
             {
               name: "None",
@@ -232,7 +318,7 @@ const deployedContracts = {
               inputs: [
                 {
                   name: "session",
-                  type: "contracts::interfaces::session_key::Session",
+                  type: "contracts::interfaces::session_key::SessionData",
                 },
                 {
                   name: "guid_or_address",
@@ -328,7 +414,7 @@ const deployedContracts = {
               ],
               outputs: [
                 {
-                  type: "core::option::Option::<contracts::interfaces::session_key::Session>",
+                  type: "core::option::Option::<contracts::interfaces::session_key::SessionResult>",
                 },
               ],
               state_mutability: "view",
@@ -339,20 +425,6 @@ const deployedContracts = {
           type: "impl",
           name: "PermissionImpl",
           interface_name: "contracts::interfaces::permission::IPermission",
-        },
-        {
-          type: "enum",
-          name: "contracts::interfaces::permission::AccessMode",
-          variants: [
-            {
-              name: "Whitelist",
-              type: "()",
-            },
-            {
-              name: "Blacklist",
-              type: "()",
-            },
-          ],
         },
         {
           type: "interface",
@@ -421,7 +493,7 @@ const deployedContracts = {
               ],
               outputs: [
                 {
-                  type: "(contracts::interfaces::permission::AccessMode, core::array::Array::<core::felt252>)",
+                  type: "contracts::interfaces::permission::PermissionResult",
                 },
               ],
               state_mutability: "view",
@@ -432,20 +504,6 @@ const deployedContracts = {
           type: "impl",
           name: "PolicyImpl",
           interface_name: "contracts::interfaces::policy::IPolicy",
-        },
-        {
-          type: "struct",
-          name: "core::integer::u256",
-          members: [
-            {
-              name: "low",
-              type: "core::integer::u128",
-            },
-            {
-              name: "high",
-              type: "core::integer::u128",
-            },
-          ],
         },
         {
           type: "struct",
@@ -756,7 +814,7 @@ const deployedContracts = {
         },
       ],
       classHash:
-        "0x7c2126e6e3727ff78d9897702275e04a7ba72a29be39e5dc3f1a2983bf86ad1",
+        "0x4166dda1797800761c782f3ea31839725ce950756bfcb22cb6c4f91a58b5b1d",
     },
   },
 } as const;

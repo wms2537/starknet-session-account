@@ -117,13 +117,14 @@ pub mod NexAccount {
 
             // Get transaction hash
             // Get session data from storage using public key from signature
-            let session = self.session_key.sessions.entry(session_public_key).read();
+            let session_entry = self.session_key.sessions.entry(session_public_key);
+            let session_data = session_entry.data.read();
             
             // Verify that the public key matches the stored session
-            assert(session.public_key == session_public_key, 'Invalid session key');
+            assert(session_data.public_key == session_public_key, 'Invalid session key');
 
             // Check session validity last
-            assert(!self.session_key.is_session_revoked(session.public_key), 'Session already revoked');
+            assert(!self.session_key.is_session_revoked(session_data.public_key), 'Session already revoked');
             
             // Verify signature
             assert(
@@ -142,7 +143,7 @@ pub mod NexAccount {
                     Option::Some(call) => {
                         assert(
                             self.session_key.check_permission(
-                                session.public_key, *call.to, *call.selector
+                                session_data.public_key, *call.to, *call.selector
                             ),
                             Errors::INVALID_SELECTOR
                         );
@@ -152,7 +153,7 @@ pub mod NexAccount {
                             let amount_high: u128 = (*call.calldata[2]).try_into().unwrap();
                             let amount = u256 { low: amount_low, high: amount_high };
                             assert(
-                                self.session_key.check_policy(session.public_key, *call.to, amount),
+                                self.session_key.check_policy(session_data.public_key, *call.to, amount),
                                 'Policy check failed'
                             );
                         }
@@ -228,9 +229,10 @@ pub mod NexAccount {
             // Check if it's a session transaction
             if self.session_key.is_session(tx_info.signature) {
                 let session_public_key: felt252 = *tx_info.signature[1];  // Keep public key in signature
-                let session = self.session_key.sessions.entry(session_public_key).read();
+                let session_entry = self.session_key.sessions.entry(session_public_key);
+                let session_data = session_entry.data.read();
 
-                assert(block_info.block_timestamp < session.expires_at, 'Session expired');
+                assert(block_info.block_timestamp < session_data.expires_at, 'Session expired');
             }
 
             // If not a session transaction, execute normally

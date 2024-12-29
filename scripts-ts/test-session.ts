@@ -6,20 +6,28 @@ import deployedContracts from "../outputs/contracts/deployedContracts";
 import { green, yellow } from "./helpers/colorize-log";
 
 class Session {
+    data: SessionData;
+    permissions: Map<string, SessionPermission>;
+    policy: Map<string, SessionPolicy>;
+
+    constructor(data: SessionData, permissions: Map<string, SessionPermission>, policy: Map<string, SessionPolicy>) {
+        this.data = data;
+        this.permissions = permissions;
+        this.policy = policy;
+    }
+}
+
+class SessionData {
     publicKey: string;
     expiresAt: number;
     metadata: string;
     isRevoked: boolean;
-    permissions: SessionPermission[];
-    policy: SessionPolicy;
 
-    constructor(publicKey: string, expiresAt: number, metadata: string, isRevoked: boolean = false) {
+    constructor(publicKey: string, expiresAt: number, metadata: string, isRevoked: boolean) {
         this.publicKey = publicKey;
         this.expiresAt = expiresAt;
         this.metadata = metadata;
         this.isRevoked = isRevoked;
-        this.permissions = null;
-        this.policy = null;
     }
 }
 
@@ -36,6 +44,7 @@ class SessionPermission {
 }
 
 class SessionPolicy {
+    contract: string;
     maxAmount: string;
     currentAmount: string;
 
@@ -275,19 +284,14 @@ async function testBasicSessionSetup(
     }
 
     // Add calls to new test functions
-    await testGetAllSessions(accountAddress);
+    console.log(yellow("\nTesting Get All Sessions..."));
+    const sessions = await getAllSessions(accountAddress);
+    console.log(green("All Sessions:"));
+    console.log(sessions);
     console.log(yellow("\nTesting Get Session Details..."));
     const session = await getSessionDetails(accountAddress, sessionKeys);
     console.log(green("Session Details:"));
-    console.log({
-        exists: true,
-        session: {
-            publicKey: session.publicKey,
-            expiresAt: new Date(session.expiresAt * 1000).toISOString(),
-            metadata: session.metadata,
-            isRevoked: session.isRevoked
-        }
-    });
+    console.log(session);
     console.log(yellow("\nTesting Get Permission Details..."));
     const permissions = await getPermissionDetails(accountAddress, sessionKeys, targetContract);
     console.log(green("Permission Details:"));
@@ -381,11 +385,9 @@ async function setupBasicPolicy(accountAddress: string, sessionKeys: { privateKe
     console.log(green(`Basic policy set successfully for session key ${sessionKeys.publicKey}`));
 }
 
-async function testGetAllSessions(
+async function getAllSessions(
     accountAddress: string
 ) {
-    console.log(yellow("\nTesting Get All Sessions..."));
-
     const getAllSessionsCall = {
         contractAddress: accountAddress,
         entrypoint: "get_all_sessions",
@@ -393,16 +395,13 @@ async function testGetAllSessions(
     };
 
     const allSessions = await provider.callContract(getAllSessionsCall);
-    console.log(green("All Sessions:"));
+    
     const sessions_len = Number(allSessions[0]);
     const sessions = [];
     for (let i = 0; i < sessions_len; i++) {
         sessions.push(allSessions[i + 1]);
     }
-    console.log({
-        sessions_len,
-        sessions
-    });
+    return sessions;
 }
 
 async function getSessionDetails(
@@ -417,16 +416,83 @@ async function getSessionDetails(
         })
     };
     const sessionResult = await provider.callContract(getSessionCall);
-    if (sessionResult[0] !== '0') {
-        const publicKey = sessionResult[1];
-        const expiresAt = Number(sessionResult[2]);
-        const metadataLen = Number(sessionResult[3]);
-        const metadata = sessionResult.slice(4, 4 + metadataLen)
-            .map(n => String.fromCharCode(Number(n)))
-            .join('');
-        const isRevoked = Boolean(Number(sessionResult[4 + metadataLen]));
-        const session = new Session(publicKey, expiresAt, metadata, isRevoked);
-        return session;
+    console.log(sessionResult);
+    
+    if (sessionResult[0] !== '0') { // Session exists
+        // Parse SessionData
+        let offset = 1; // Skip the exists flag
+        const publicKey = sessionResult[offset++];
+        console.log(publicKey);
+        const expiresAt = Number(sessionResult[offset++]);
+        const fullWordsCount = Number(sessionResult[offset++]);
+        let metadata = '';
+
+        // Process full words (31 bytes each)
+        for (let i = 0; i < fullWordsCount; i++) {
+            const word = BigInt(sessionResult[offset + i]);
+            for (let j = 0; j < 31; j++) {
+                const byte = Number((word >> BigInt(j * 8)) & 0xFFn);
+                metadata += String.fromCharCode(byte);
+            }
+        }
+        
+        offset += fullWordsCount;
+        
+        // Process remaining word
+        const remainingWord = BigInt(sessionResult[offset++]);
+        const remainingWordLen = Number(sessionResult[offset++]);
+        
+        if (remainingWordLen > 0) {
+            for (let i = 0; i < remainingWordLen; i++) {
+                const byte = Number((remainingWord >> BigInt(i * 8)) & 0xFFn);
+                metadata += String.fromCharCode(byte);
+            }
+        }
+        console.log(metadata);
+        const isRevoked = Boolean(Number(sessionResult[offset++]));
+        
+        // Parse Permissions array
+        const permissionsLen = Number(sessionResult[offset++]);
+        console.log(permissionsLen);
+        console.log(offset)
+        const permissions = new Map<string, SessionPermission>();
+        for (let i = 0; i < permissionsLen; i++) {
+            const mode = Number(sessionResult[offset++]) === 0 ? 'whitelist' : 'blacklist';
+            const contract = sessionResult[offset++];
+            const selectorsLen = Number(sessionResult[offset++]);
+            const selectors = sessionResult
+                .slice(offset, offset + selectorsLen)
+                .map(s => s.toString());
+            
+            permissions.set(contract, new SessionPermission(
+                mode,
+                contract.toString(),
+                selectors
+            ));
+            
+            offset += selectorsLen;
+        }
+
+        // Parse Policies array
+        const policiesLen = Number(sessionResult[offset++]);
+        const policies = new Map<string, SessionPolicy>();
+
+        for (let i = 0; i < policiesLen; i++) {
+            const contract = sessionResult[offset++].toString();
+            const maxAmount = sessionResult[offset++].toString();
+            const currentAmount = sessionResult[offset++].toString();
+            
+            policies.set(contract, new SessionPolicy(
+                maxAmount,
+                currentAmount
+            ));
+        }
+
+        return new Session(
+            new SessionData(publicKey, expiresAt, metadata, isRevoked),
+            permissions,
+            policies
+        );
     }
     return null;
 }

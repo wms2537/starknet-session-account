@@ -7,6 +7,13 @@ pub struct Policy {
     pub current_amount: u256,
 }
 
+#[derive(Drop, Serde)]
+pub struct PolicyResult {
+    pub contract: ContractAddress,
+    pub max_amount: u256,
+    pub current_amount: u256,
+}
+
 #[starknet::interface]
 pub trait IPolicy<TContractState> {
     fn set_policy(

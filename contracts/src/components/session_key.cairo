@@ -8,20 +8,20 @@ pub mod session_key_component {
     };
     use core::starknet::storage::{Map, Vec, StoragePointerReadAccess, StoragePointerWriteAccess, StoragePathEntry, VecTrait, MutableVecTrait};
     
-    use contracts::interfaces::session_key::{Session, ISession};
-    use contracts::interfaces::permission::{AccessMode, IPermission};
-    use contracts::interfaces::policy::{Policy, IPolicy};
+    use contracts::interfaces::session_key::{Session, ISession, SessionData, SessionResult};
+    use contracts::interfaces::permission::{AccessMode, IPermission, PermissionResult};
+    use contracts::interfaces::policy::{Policy, IPolicy, PolicyResult};
 
     #[storage]
     pub struct Storage {
         pub sessions: Map<felt252, Session>,
         sessions_vec: Vec<felt252>,
         valid_session_cache: Map<(felt252, felt252), bool>,
-        permission_modes: Map<(felt252, ContractAddress), AccessMode>,
-        permission_selector_count: Map<(felt252, ContractAddress), u32>,
-        permission_selectors: Map<(felt252, ContractAddress, u32), felt252>,
-        permission_active_selectors: Map<(felt252, ContractAddress, felt252), bool>,
-        policies: Map<(felt252, ContractAddress), Policy>
+        // permission_modes: Map<(felt252, ContractAddress), AccessMode>,
+        // permission_selector_count: Map<(felt252, ContractAddress), u32>,
+        // permission_selectors: Map<(felt252, ContractAddress, u32), felt252>,
+        // permission_active_selectors: Map<(felt252, ContractAddress, felt252), bool>,
+        // policies: Map<(felt252, ContractAddress), Policy>
     }
 
     #[event]
@@ -63,13 +63,13 @@ pub mod session_key_component {
     > of ISession<ComponentState<TContractState>> {
         fn register_session(
             ref self: ComponentState<TContractState>,
-            session: Session,
+            session: SessionData,
             guid_or_address: felt252
         ) {
             let public_key = session.public_key;
             assert(session.expires_at >= get_block_timestamp(), 'Session expired');
 
-            self.sessions.entry(public_key).write(session);
+            self.sessions.entry(public_key).data.write(session);
             self.sessions_vec.append().write(public_key);
             self.valid_session_cache.entry((guid_or_address, public_key)).write(true);
             self.emit(SessionRegistered { public_key, guid_or_address });
@@ -79,10 +79,10 @@ pub mod session_key_component {
             ref self: ComponentState<TContractState>,
             public_key: felt252
         ) {
-            let mut session = self.sessions.entry(public_key).read();
-            assert(!session.is_revoked, 'Session already revoked');
-            session.is_revoked = true;
-            self.sessions.entry(public_key).write(session);
+            let mut session_data = self.sessions.entry(public_key).data.read();
+            assert(!session_data.is_revoked, 'Session already revoked');
+            session_data.is_revoked = true;
+            self.sessions.entry(public_key).data.write(session_data);
             self.emit(SessionRevoked { public_key });
         }
 
@@ -90,8 +90,8 @@ pub mod session_key_component {
             self: @ComponentState<TContractState>,
             public_key: felt252
         ) -> bool {
-            let session = self.sessions.entry(public_key).read();
-            session.is_revoked
+            let session_data = self.sessions.entry(public_key).data.read();
+            session_data.is_revoked
         }
 
         fn is_session(
@@ -128,12 +128,41 @@ pub mod session_key_component {
         fn get_session(
             self: @ComponentState<TContractState>,
             public_key: felt252
-        ) -> Option<Session> {
-            let session = self.sessions.entry(public_key).read();
-            if session.public_key == 0 {
+        ) -> Option<SessionResult> {
+            let session_entry = self.sessions.entry(public_key);
+            let session_data = session_entry.data.read();
+            if session_data.public_key == 0 {
                 Option::None
             } else {
-                Option::Some(session)
+                let mut permissions = array![];
+                for i in 0..session_entry.permissions_vec.len() {
+                    let contract = session_entry.permissions_vec.at(i).read();
+                    let permission = session_entry.permissions_map.entry(contract);
+                    let mut selectors = array![];
+                    for j in 0..permission.selector_count.read() {
+                        selectors.append(permission.selectors.entry(j).read());
+                    };
+                    permissions.append(PermissionResult {
+                        mode: permission.mode.read(),
+                        selectors: selectors,
+                        contract: contract,
+                    });
+                };
+                let mut policies = array![];
+                for i in 0..session_entry.policies_vec.len() {
+                    let contract = session_entry.policies_vec.at(i).read();
+                    let policy = session_entry.policies_map.entry(contract);
+                    policies.append(PolicyResult {
+                        contract: contract,
+                        max_amount: policy.max_amount.read(),
+                        current_amount: policy.current_amount.read(),
+                    });
+                };
+                Option::Some(SessionResult {
+                    data: session_data,
+                    permissions: permissions,
+                    policies: policies,
+                })
             }
         }
     }
@@ -150,16 +179,19 @@ pub mod session_key_component {
             mode: AccessMode,
             selectors: Array<felt252>
         ) {
-            self.permission_modes.entry((public_key, contract)).write(mode);
+            let session_entry = self.sessions.entry(public_key);
+            let mut permission = session_entry.permissions_map.entry(contract);
+            permission.mode.write(mode);
 
-            let old_count = self.permission_selector_count.entry((public_key, contract)).read();
+
+            let old_count = permission.selector_count.read();
             let mut i = 0;
             loop {
                 if i >= old_count {
                     break;
                 }
-                let old_selector = self.permission_selectors.entry((public_key, contract, i)).read();
-                self.permission_active_selectors.entry((public_key, contract, old_selector)).write(false);
+                permission.selectors_map.entry(permission.selectors.entry(i).read()).write(false);
+                permission.selectors.entry(i).write(0);
                 i += 1;
             };
 
@@ -168,15 +200,15 @@ pub mod session_key_component {
             loop {
                 match selectors.pop_front() {
                     Option::Some(selector) => {
-                        self.permission_selectors.entry((public_key, contract, new_count)).write(selector);
-                        self.permission_active_selectors.entry((public_key, contract, selector)).write(true);
+                        permission.selectors.entry(new_count).write(selector);
+                        permission.selectors_map.entry(selector).write(true);
                         new_count += 1;
                     },
                     Option::None => { break; }
                 };
             };
-            self.permission_selector_count.entry((public_key, contract)).write(new_count);
-
+            permission.selector_count.write(new_count);
+            session_entry.permissions_vec.append().write(contract);
             self.emit(PermissionUpdated { public_key, contract });
         }
 
@@ -186,8 +218,10 @@ pub mod session_key_component {
             contract: ContractAddress,
             selector: felt252
         ) -> bool {
-            let mode = self.permission_modes.entry((public_key, contract)).read();
-            let selector_exists = self.permission_active_selectors.entry((public_key, contract, selector)).read();
+            let session_entry = self.sessions.entry(public_key);
+            let permission = session_entry.permissions_map.entry(contract);
+            let mode = permission.mode.read();
+            let selector_exists = permission.selectors_map.entry(selector).read();
             
             match mode {
                 AccessMode::Whitelist => selector_exists,
@@ -199,9 +233,11 @@ pub mod session_key_component {
             self: @ComponentState<TContractState>,
             public_key: felt252,
             contract: ContractAddress
-        ) -> (AccessMode, Array<felt252>) {
-            let mode = self.permission_modes.entry((public_key, contract)).read();
-            let count = self.permission_selector_count.entry((public_key, contract)).read();
+        ) -> PermissionResult {
+            let session_entry = self.sessions.entry(public_key);
+            let permission = session_entry.permissions_map.entry(contract);
+            let mode = permission.mode.read();
+            let count = permission.selector_count.read();
             
             let mut selectors = ArrayTrait::new();
             let mut i = 0;
@@ -209,12 +245,16 @@ pub mod session_key_component {
                 if i >= count {
                     break;
                 }
-                let selector = self.permission_selectors.entry((public_key, contract, i)).read();
+                let selector = permission.selectors.entry(i).read();
                 selectors.append(selector);
                 i += 1;
             };
             
-            (mode, selectors)
+            PermissionResult {
+                mode: mode,
+                selectors: selectors,
+                contract: contract,
+            }
         }
     }
 
@@ -229,8 +269,9 @@ pub mod session_key_component {
             contract: ContractAddress,
             policy: Policy
         ) {
+            let session_entry = self.sessions.entry(public_key);
             let mut policy = policy;
-            self.policies.entry((public_key, contract)).write(policy);
+            session_entry.policies_map.entry(contract).write(policy);
             self.emit(PolicyUpdated { public_key, contract });
         }
 
@@ -240,7 +281,8 @@ pub mod session_key_component {
             contract: ContractAddress,
             amount: u256
         ) -> bool {
-            let mut policy = self.policies.entry((public_key, contract)).read();
+            let session_entry = self.sessions.entry(public_key);
+            let mut policy = session_entry.policies_map.entry(contract).read();
 
             // Check if new amount would exceed limit
             let new_amount = policy.current_amount + amount;
@@ -250,7 +292,8 @@ pub mod session_key_component {
 
             // Update policy state
             policy.current_amount = new_amount;
-            self.policies.entry((public_key, contract)).write(policy);
+            session_entry.policies_map.entry(contract).write(policy);
+            session_entry.policies_vec.append().write(contract);
             true
         }
 
@@ -259,7 +302,8 @@ pub mod session_key_component {
             public_key: felt252,
             contract: ContractAddress
         ) -> Option<Policy> {
-            let policy = self.policies.entry((public_key, contract)).read();
+            let session_entry = self.sessions.entry(public_key);
+            let policy = session_entry.policies_map.entry(contract).read();
             Option::Some(policy)
         }
     }
