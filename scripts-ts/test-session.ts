@@ -1,57 +1,33 @@
-import { Account, CallData, RpcProvider, hash, uint256, ec, Provider, TransactionFinalityStatus, Signer, stark, RevertedTransactionReceiptResponse } from "starknet";
+import { Account, CallData, RpcProvider, hash, uint256, ec, Provider, TransactionFinalityStatus, Signer, stark, RevertedTransactionReceiptResponse, byteArray } from "starknet";
 
 
 import { networks } from "./helpers/networks";
 import deployedContracts from "../outputs/contracts/deployedContracts";
 import { green, yellow } from "./helpers/colorize-log";
 
-class Session {
+interface Session {
     data: SessionData;
     permissions: Map<string, SessionPermission>;
     policy: Map<string, SessionPolicy>;
-
-    constructor(data: SessionData, permissions: Map<string, SessionPermission>, policy: Map<string, SessionPolicy>) {
-        this.data = data;
-        this.permissions = permissions;
-        this.policy = policy;
-    }
 }
 
-class SessionData {
+interface SessionData {
     publicKey: string;
     expiresAt: number;
     metadata: string;
     isRevoked: boolean;
-
-    constructor(publicKey: string, expiresAt: number, metadata: string, isRevoked: boolean) {
-        this.publicKey = publicKey;
-        this.expiresAt = expiresAt;
-        this.metadata = metadata;
-        this.isRevoked = isRevoked;
-    }
 }
 
-class SessionPermission {
+interface SessionPermission {
     mode: string;
     contract: string;
     selectors: string[];
-
-    constructor(mode: string, contract: string, selectors: string[]) {
-        this.mode = mode;
-        this.contract = contract;
-        this.selectors = selectors;
-    }
 }
 
-class SessionPolicy {
+interface SessionPolicy {
     contract: string;
     maxAmount: string;
     currentAmount: string;
-
-    constructor(maxAmount: string, currentAmount: string) {
-        this.maxAmount = maxAmount;
-        this.currentAmount = currentAmount;
-    }
 }
 
 
@@ -172,7 +148,7 @@ async function main() {
     // Initialize provider and accounts
     provider = networks.devnet.provider;
     const contracts = deployedContracts.devnet;
-    const accountAddress = contracts.NexAccount.address;
+    const accountAddress = contracts.MyAccount.address;
     const targetContract = ETH_ADDRESS;
     
     await fundAccount(provider, accountAddress);
@@ -318,7 +294,7 @@ async function setupTestSession(accountAddress: string, metadata: string, mainAc
             session: {
                 public_key: sessionKeys.publicKey,
                 expires_at: currentTime + expiry,
-                metadata: createMetadata(metadata),
+                metadata: byteArray.byteArrayFromString(metadata),
                 is_revoked: false,
             },
             guid_or_address: MAIN_PUBLIC_KEY
@@ -464,11 +440,11 @@ async function getSessionDetails(
                 .slice(offset, offset + selectorsLen)
                 .map(s => s.toString());
             
-            permissions.set(contract, new SessionPermission(
+            permissions.set(contract, {
                 mode,
-                contract.toString(),
+                contract: contract.toString(),
                 selectors
-            ));
+            });
             
             offset += selectorsLen;
         }
@@ -482,17 +458,23 @@ async function getSessionDetails(
             const maxAmount = sessionResult[offset++].toString();
             const currentAmount = sessionResult[offset++].toString();
             
-            policies.set(contract, new SessionPolicy(
+            policies.set(contract, {
+                contract,
                 maxAmount,
                 currentAmount
-            ));
+            });
         }
 
-        return new Session(
-            new SessionData(publicKey, expiresAt, metadata, isRevoked),
+        return {
+            data: {
+                publicKey,
+                expiresAt,
+                metadata,
+                isRevoked
+            },
             permissions,
             policies
-        );
+        };
     }
     return null;
 }
@@ -520,7 +502,11 @@ async function getPermissionDetails(
         const selectorsLength = Number(permissionResult[1]);
         const selectors = permissionResult.slice(2, 2 + selectorsLength);
 
-        return new SessionPermission(mode, targetContract, selectors);
+        return {
+            mode,
+            contract: targetContract,
+            selectors
+        };
     }
 }
 
@@ -550,11 +536,11 @@ async function getPolicyDetails(
             high: policyResult[4]
         };
         
-        const policy = new SessionPolicy(
-            uint256.uint256ToBN(maxAmount).toString(),
-            uint256.uint256ToBN(currentAmount).toString()
-        );
-        return policy;
+        return {
+            contract: targetContract,
+            maxAmount: uint256.uint256ToBN(maxAmount).toString(),
+            currentAmount: uint256.uint256ToBN(currentAmount).toString()
+        };
     }
 }
 
@@ -846,16 +832,38 @@ async function testMultipleSessions(
 function createMetadata(text: string) {
     const metadataBytes = Array.from(Buffer.from(text));
     const BYTES_PER_FELT = 31;
+    
+    // Calculate full words
     const fullWords = Math.floor(metadataBytes.length / BYTES_PER_FELT);
-    const fullWordsData = Array(fullWords).fill(0);
+    const fullWordsData = [];
+    
+    // Process each full word (31 bytes each)
+    for (let i = 0; i < fullWords; i++) {
+        const wordBytes = metadataBytes.slice(i * BYTES_PER_FELT, (i + 1) * BYTES_PER_FELT);
+        const wordValue = wordBytes.reduce(
+            (acc, byte, j) => acc + BigInt(byte) * (256n ** BigInt(j)),
+            0n
+        );
+        fullWordsData.push(wordValue.toString());
+    }
+    
+    // Process remaining bytes
     const remainingBytes = metadataBytes.slice(fullWords * BYTES_PER_FELT);
     const remainingWord = remainingBytes.reduce(
         (acc, byte, i) => acc + BigInt(byte) * (256n ** BigInt(i)), 
         0n
     ).toString();
 
+    if(fullWordsData.length > 0) {
+        return {
+            num_full_words: fullWordsData.length,
+            data: fullWordsData,
+            pending_word: remainingWord,
+            pending_word_len: remainingBytes.length
+        }
+    }
     return {
-        data: fullWordsData,
+        num_full_words: 0,
         pending_word: remainingWord,
         pending_word_len: remainingBytes.length
     };

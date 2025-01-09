@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-pub mod nex_account;
 
 pub mod interfaces {
     pub mod permission;
@@ -8,15 +7,11 @@ pub mod interfaces {
 }
 
 pub mod components {
-    pub mod session_key;
+    pub mod account;
 }
 
 pub mod utils {
     pub mod asserts;
 }
 
-#[cfg(test)]
-pub mod tests {
-    pub mod test_contract;
-    pub mod test_utils;
-}
+pub mod myaccount;

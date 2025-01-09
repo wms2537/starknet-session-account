@@ -46,15 +46,15 @@ const MAIN_PUBLIC_KEY = "0x00c6c2f7833f681c8fe001533e99571f6ff8dec59268792a429a1
  */
 const deployScript = async (): Promise<void> => {
   // Declare InfiniRewardsPoints contract
-  const nexAccountClassHash = await declareContract({
-    contract: "NexAccount",
+  const myAccountClassHash = await declareContract({
+    contract: "MyAccount",
   });
-  console.log("NexAccount class hash:", nexAccountClassHash);
+  console.log("MyAccount class hash:", myAccountClassHash);
 
   
   // Deploy InfiniRewardsFactory contract
   await deployContract({
-    contract: "NexAccount",
+    contract: "MyAccount",
     constructorArgs: {
       public_key: MAIN_PUBLIC_KEY,
     },
