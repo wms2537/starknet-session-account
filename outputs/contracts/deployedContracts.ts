@@ -2569,6 +2569,876 @@ const deployedContracts = {
       classHash:
         "0x2244805d0a387beae08b05230f357b953d649a2b5d54ef8a381807737dd3012",
     },
+    MyAccount: {
+      address:
+        "0x3f0c24932a02aa6884f9ff560b4fe9f6781daec1b4ef16c848d9102d3cbcbf1",
+      abi: [
+        {
+          type: "impl",
+          name: "UpgradeableImpl",
+          interface_name: "openzeppelin_upgrades::interface::IUpgradeable",
+        },
+        {
+          type: "interface",
+          name: "openzeppelin_upgrades::interface::IUpgradeable",
+          items: [
+            {
+              type: "function",
+              name: "upgrade",
+              inputs: [
+                {
+                  name: "new_class_hash",
+                  type: "core::starknet::class_hash::ClassHash",
+                },
+              ],
+              outputs: [],
+              state_mutability: "external",
+            },
+          ],
+        },
+        {
+          type: "impl",
+          name: "AccountMixinImpl",
+          interface_name: "contracts::components::account::AccountABI",
+        },
+        {
+          type: "struct",
+          name: "core::array::Span::<core::felt252>",
+          members: [
+            {
+              name: "snapshot",
+              type: "@core::array::Array::<core::felt252>",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "core::starknet::account::Call",
+          members: [
+            {
+              name: "to",
+              type: "core::starknet::contract_address::ContractAddress",
+            },
+            {
+              name: "selector",
+              type: "core::felt252",
+            },
+            {
+              name: "calldata",
+              type: "core::array::Span::<core::felt252>",
+            },
+          ],
+        },
+        {
+          type: "enum",
+          name: "core::bool",
+          variants: [
+            {
+              name: "False",
+              type: "()",
+            },
+            {
+              name: "True",
+              type: "()",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "core::byte_array::ByteArray",
+          members: [
+            {
+              name: "data",
+              type: "core::array::Array::<core::bytes_31::bytes31>",
+            },
+            {
+              name: "pending_word",
+              type: "core::felt252",
+            },
+            {
+              name: "pending_word_len",
+              type: "core::integer::u32",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "contracts::interfaces::session_key::SessionData",
+          members: [
+            {
+              name: "public_key",
+              type: "core::felt252",
+            },
+            {
+              name: "expires_at",
+              type: "core::integer::u64",
+            },
+            {
+              name: "metadata",
+              type: "core::byte_array::ByteArray",
+            },
+            {
+              name: "is_revoked",
+              type: "core::bool",
+            },
+          ],
+        },
+        {
+          type: "enum",
+          name: "contracts::interfaces::permission::AccessMode",
+          variants: [
+            {
+              name: "Whitelist",
+              type: "()",
+            },
+            {
+              name: "Blacklist",
+              type: "()",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "contracts::interfaces::permission::PermissionResult",
+          members: [
+            {
+              name: "mode",
+              type: "contracts::interfaces::permission::AccessMode",
+            },
+            {
+              name: "contract",
+              type: "core::starknet::contract_address::ContractAddress",
+            },
+            {
+              name: "selectors",
+              type: "core::array::Array::<core::felt252>",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "core::integer::u256",
+          members: [
+            {
+              name: "low",
+              type: "core::integer::u128",
+            },
+            {
+              name: "high",
+              type: "core::integer::u128",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "contracts::interfaces::policy::PolicyResult",
+          members: [
+            {
+              name: "contract",
+              type: "core::starknet::contract_address::ContractAddress",
+            },
+            {
+              name: "max_amount",
+              type: "core::integer::u256",
+            },
+            {
+              name: "current_amount",
+              type: "core::integer::u256",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "contracts::interfaces::session_key::SessionResult",
+          members: [
+            {
+              name: "data",
+              type: "contracts::interfaces::session_key::SessionData",
+            },
+            {
+              name: "permissions",
+              type: "core::array::Array::<contracts::interfaces::permission::PermissionResult>",
+            },
+            {
+              name: "policies",
+              type: "core::array::Array::<contracts::interfaces::policy::PolicyResult>",
+            },
+          ],
+        },
+        {
+          type: "enum",
+          name: "core::option::Option::<contracts::interfaces::session_key::SessionResult>",
+          variants: [
+            {
+              name: "Some",
+              type: "contracts::interfaces::session_key::SessionResult",
+            },
+            {
+              name: "None",
+              type: "()",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "contracts::interfaces::policy::Policy",
+          members: [
+            {
+              name: "max_amount",
+              type: "core::integer::u256",
+            },
+            {
+              name: "current_amount",
+              type: "core::integer::u256",
+            },
+          ],
+        },
+        {
+          type: "enum",
+          name: "core::option::Option::<contracts::interfaces::policy::Policy>",
+          variants: [
+            {
+              name: "Some",
+              type: "contracts::interfaces::policy::Policy",
+            },
+            {
+              name: "None",
+              type: "()",
+            },
+          ],
+        },
+        {
+          type: "interface",
+          name: "contracts::components::account::AccountABI",
+          items: [
+            {
+              type: "function",
+              name: "__execute__",
+              inputs: [
+                {
+                  name: "calls",
+                  type: "core::array::Array::<core::starknet::account::Call>",
+                },
+              ],
+              outputs: [
+                {
+                  type: "core::array::Array::<core::array::Span::<core::felt252>>",
+                },
+              ],
+              state_mutability: "view",
+            },
+            {
+              type: "function",
+              name: "__validate__",
+              inputs: [
+                {
+                  name: "calls",
+                  type: "core::array::Array::<core::starknet::account::Call>",
+                },
+              ],
+              outputs: [
+                {
+                  type: "core::felt252",
+                },
+              ],
+              state_mutability: "external",
+            },
+            {
+              type: "function",
+              name: "is_valid_signature",
+              inputs: [
+                {
+                  name: "hash",
+                  type: "core::felt252",
+                },
+                {
+                  name: "signature",
+                  type: "core::array::Array::<core::felt252>",
+                },
+              ],
+              outputs: [
+                {
+                  type: "core::felt252",
+                },
+              ],
+              state_mutability: "view",
+            },
+            {
+              type: "function",
+              name: "supports_interface",
+              inputs: [
+                {
+                  name: "interface_id",
+                  type: "core::felt252",
+                },
+              ],
+              outputs: [
+                {
+                  type: "core::bool",
+                },
+              ],
+              state_mutability: "view",
+            },
+            {
+              type: "function",
+              name: "__validate_declare__",
+              inputs: [
+                {
+                  name: "class_hash",
+                  type: "core::felt252",
+                },
+              ],
+              outputs: [
+                {
+                  type: "core::felt252",
+                },
+              ],
+              state_mutability: "view",
+            },
+            {
+              type: "function",
+              name: "__validate_deploy__",
+              inputs: [
+                {
+                  name: "class_hash",
+                  type: "core::felt252",
+                },
+                {
+                  name: "contract_address_salt",
+                  type: "core::felt252",
+                },
+                {
+                  name: "public_key",
+                  type: "core::felt252",
+                },
+              ],
+              outputs: [
+                {
+                  type: "core::felt252",
+                },
+              ],
+              state_mutability: "view",
+            },
+            {
+              type: "function",
+              name: "get_public_key",
+              inputs: [],
+              outputs: [
+                {
+                  type: "core::felt252",
+                },
+              ],
+              state_mutability: "view",
+            },
+            {
+              type: "function",
+              name: "set_public_key",
+              inputs: [
+                {
+                  name: "new_public_key",
+                  type: "core::felt252",
+                },
+                {
+                  name: "signature",
+                  type: "core::array::Span::<core::felt252>",
+                },
+              ],
+              outputs: [],
+              state_mutability: "external",
+            },
+            {
+              type: "function",
+              name: "isValidSignature",
+              inputs: [
+                {
+                  name: "hash",
+                  type: "core::felt252",
+                },
+                {
+                  name: "signature",
+                  type: "core::array::Array::<core::felt252>",
+                },
+              ],
+              outputs: [
+                {
+                  type: "core::felt252",
+                },
+              ],
+              state_mutability: "view",
+            },
+            {
+              type: "function",
+              name: "getPublicKey",
+              inputs: [],
+              outputs: [
+                {
+                  type: "core::felt252",
+                },
+              ],
+              state_mutability: "view",
+            },
+            {
+              type: "function",
+              name: "setPublicKey",
+              inputs: [
+                {
+                  name: "newPublicKey",
+                  type: "core::felt252",
+                },
+                {
+                  name: "signature",
+                  type: "core::array::Span::<core::felt252>",
+                },
+              ],
+              outputs: [],
+              state_mutability: "external",
+            },
+            {
+              type: "function",
+              name: "register_session",
+              inputs: [
+                {
+                  name: "session",
+                  type: "contracts::interfaces::session_key::SessionData",
+                },
+                {
+                  name: "guid_or_address",
+                  type: "core::felt252",
+                },
+              ],
+              outputs: [],
+              state_mutability: "external",
+            },
+            {
+              type: "function",
+              name: "revoke_session",
+              inputs: [
+                {
+                  name: "public_key",
+                  type: "core::felt252",
+                },
+              ],
+              outputs: [],
+              state_mutability: "external",
+            },
+            {
+              type: "function",
+              name: "is_session_registered",
+              inputs: [
+                {
+                  name: "public_key",
+                  type: "core::felt252",
+                },
+                {
+                  name: "guid_or_address",
+                  type: "core::felt252",
+                },
+              ],
+              outputs: [
+                {
+                  type: "core::bool",
+                },
+              ],
+              state_mutability: "view",
+            },
+            {
+              type: "function",
+              name: "get_all_sessions",
+              inputs: [],
+              outputs: [
+                {
+                  type: "core::array::Array::<core::felt252>",
+                },
+              ],
+              state_mutability: "view",
+            },
+            {
+              type: "function",
+              name: "get_session",
+              inputs: [
+                {
+                  name: "public_key",
+                  type: "core::felt252",
+                },
+              ],
+              outputs: [
+                {
+                  type: "core::option::Option::<contracts::interfaces::session_key::SessionResult>",
+                },
+              ],
+              state_mutability: "view",
+            },
+            {
+              type: "function",
+              name: "set_permission",
+              inputs: [
+                {
+                  name: "public_key",
+                  type: "core::felt252",
+                },
+                {
+                  name: "contract",
+                  type: "core::starknet::contract_address::ContractAddress",
+                },
+                {
+                  name: "mode",
+                  type: "contracts::interfaces::permission::AccessMode",
+                },
+                {
+                  name: "selectors",
+                  type: "core::array::Array::<core::felt252>",
+                },
+              ],
+              outputs: [],
+              state_mutability: "external",
+            },
+            {
+              type: "function",
+              name: "get_permission_details",
+              inputs: [
+                {
+                  name: "public_key",
+                  type: "core::felt252",
+                },
+                {
+                  name: "contract",
+                  type: "core::starknet::contract_address::ContractAddress",
+                },
+              ],
+              outputs: [
+                {
+                  type: "contracts::interfaces::permission::PermissionResult",
+                },
+              ],
+              state_mutability: "view",
+            },
+            {
+              type: "function",
+              name: "set_policy",
+              inputs: [
+                {
+                  name: "public_key",
+                  type: "core::felt252",
+                },
+                {
+                  name: "contract",
+                  type: "core::starknet::contract_address::ContractAddress",
+                },
+                {
+                  name: "policy",
+                  type: "contracts::interfaces::policy::Policy",
+                },
+              ],
+              outputs: [],
+              state_mutability: "external",
+            },
+            {
+              type: "function",
+              name: "get_policy",
+              inputs: [
+                {
+                  name: "public_key",
+                  type: "core::felt252",
+                },
+                {
+                  name: "contract",
+                  type: "core::starknet::contract_address::ContractAddress",
+                },
+              ],
+              outputs: [
+                {
+                  type: "core::option::Option::<contracts::interfaces::policy::Policy>",
+                },
+              ],
+              state_mutability: "view",
+            },
+          ],
+        },
+        {
+          type: "impl",
+          name: "OutsideExecutionV2Impl",
+          interface_name:
+            "openzeppelin_account::extensions::src9::interface::ISRC9_V2",
+        },
+        {
+          type: "struct",
+          name: "core::array::Span::<core::starknet::account::Call>",
+          members: [
+            {
+              name: "snapshot",
+              type: "@core::array::Array::<core::starknet::account::Call>",
+            },
+          ],
+        },
+        {
+          type: "struct",
+          name: "openzeppelin_account::extensions::src9::interface::OutsideExecution",
+          members: [
+            {
+              name: "caller",
+              type: "core::starknet::contract_address::ContractAddress",
+            },
+            {
+              name: "nonce",
+              type: "core::felt252",
+            },
+            {
+              name: "execute_after",
+              type: "core::integer::u64",
+            },
+            {
+              name: "execute_before",
+              type: "core::integer::u64",
+            },
+            {
+              name: "calls",
+              type: "core::array::Span::<core::starknet::account::Call>",
+            },
+          ],
+        },
+        {
+          type: "interface",
+          name: "openzeppelin_account::extensions::src9::interface::ISRC9_V2",
+          items: [
+            {
+              type: "function",
+              name: "execute_from_outside_v2",
+              inputs: [
+                {
+                  name: "outside_execution",
+                  type: "openzeppelin_account::extensions::src9::interface::OutsideExecution",
+                },
+                {
+                  name: "signature",
+                  type: "core::array::Span::<core::felt252>",
+                },
+              ],
+              outputs: [
+                {
+                  type: "core::array::Array::<core::array::Span::<core::felt252>>",
+                },
+              ],
+              state_mutability: "external",
+            },
+            {
+              type: "function",
+              name: "is_valid_outside_execution_nonce",
+              inputs: [
+                {
+                  name: "nonce",
+                  type: "core::felt252",
+                },
+              ],
+              outputs: [
+                {
+                  type: "core::bool",
+                },
+              ],
+              state_mutability: "view",
+            },
+          ],
+        },
+        {
+          type: "constructor",
+          name: "constructor",
+          inputs: [
+            {
+              name: "public_key",
+              type: "core::felt252",
+            },
+          ],
+        },
+        {
+          type: "event",
+          name: "contracts::components::account::AccountComponent::OwnerAdded",
+          kind: "struct",
+          members: [
+            {
+              name: "new_owner_guid",
+              type: "core::felt252",
+              kind: "key",
+            },
+          ],
+        },
+        {
+          type: "event",
+          name: "contracts::components::account::AccountComponent::OwnerRemoved",
+          kind: "struct",
+          members: [
+            {
+              name: "removed_owner_guid",
+              type: "core::felt252",
+              kind: "key",
+            },
+          ],
+        },
+        {
+          type: "event",
+          name: "contracts::components::account::AccountComponent::SessionRegistered",
+          kind: "struct",
+          members: [
+            {
+              name: "public_key",
+              type: "core::felt252",
+              kind: "data",
+            },
+            {
+              name: "guid_or_address",
+              type: "core::felt252",
+              kind: "data",
+            },
+          ],
+        },
+        {
+          type: "event",
+          name: "contracts::components::account::AccountComponent::SessionRevoked",
+          kind: "struct",
+          members: [
+            {
+              name: "public_key",
+              type: "core::felt252",
+              kind: "data",
+            },
+          ],
+        },
+        {
+          type: "event",
+          name: "contracts::components::account::AccountComponent::PermissionUpdated",
+          kind: "struct",
+          members: [
+            {
+              name: "public_key",
+              type: "core::felt252",
+              kind: "data",
+            },
+            {
+              name: "contract",
+              type: "core::starknet::contract_address::ContractAddress",
+              kind: "data",
+            },
+          ],
+        },
+        {
+          type: "event",
+          name: "contracts::components::account::AccountComponent::PolicyUpdated",
+          kind: "struct",
+          members: [
+            {
+              name: "public_key",
+              type: "core::felt252",
+              kind: "data",
+            },
+            {
+              name: "contract",
+              type: "core::starknet::contract_address::ContractAddress",
+              kind: "data",
+            },
+          ],
+        },
+        {
+          type: "event",
+          name: "contracts::components::account::AccountComponent::Event",
+          kind: "enum",
+          variants: [
+            {
+              name: "OwnerAdded",
+              type: "contracts::components::account::AccountComponent::OwnerAdded",
+              kind: "nested",
+            },
+            {
+              name: "OwnerRemoved",
+              type: "contracts::components::account::AccountComponent::OwnerRemoved",
+              kind: "nested",
+            },
+            {
+              name: "SessionRegistered",
+              type: "contracts::components::account::AccountComponent::SessionRegistered",
+              kind: "nested",
+            },
+            {
+              name: "SessionRevoked",
+              type: "contracts::components::account::AccountComponent::SessionRevoked",
+              kind: "nested",
+            },
+            {
+              name: "PermissionUpdated",
+              type: "contracts::components::account::AccountComponent::PermissionUpdated",
+              kind: "nested",
+            },
+            {
+              name: "PolicyUpdated",
+              type: "contracts::components::account::AccountComponent::PolicyUpdated",
+              kind: "nested",
+            },
+          ],
+        },
+        {
+          type: "event",
+          name: "openzeppelin_introspection::src5::SRC5Component::Event",
+          kind: "enum",
+          variants: [],
+        },
+        {
+          type: "event",
+          name: "openzeppelin_account::extensions::src9::src9::SRC9Component::Event",
+          kind: "enum",
+          variants: [],
+        },
+        {
+          type: "event",
+          name: "openzeppelin_upgrades::upgradeable::UpgradeableComponent::Upgraded",
+          kind: "struct",
+          members: [
+            {
+              name: "class_hash",
+              type: "core::starknet::class_hash::ClassHash",
+              kind: "data",
+            },
+          ],
+        },
+        {
+          type: "event",
+          name: "openzeppelin_upgrades::upgradeable::UpgradeableComponent::Event",
+          kind: "enum",
+          variants: [
+            {
+              name: "Upgraded",
+              type: "openzeppelin_upgrades::upgradeable::UpgradeableComponent::Upgraded",
+              kind: "nested",
+            },
+          ],
+        },
+        {
+          type: "event",
+          name: "contracts::myaccount::MyAccount::Event",
+          kind: "enum",
+          variants: [
+            {
+              name: "AccountEvent",
+              type: "contracts::components::account::AccountComponent::Event",
+              kind: "flat",
+            },
+            {
+              name: "SRC5Event",
+              type: "openzeppelin_introspection::src5::SRC5Component::Event",
+              kind: "flat",
+            },
+            {
+              name: "SRC9Event",
+              type: "openzeppelin_account::extensions::src9::src9::SRC9Component::Event",
+              kind: "flat",
+            },
+            {
+              name: "UpgradeableEvent",
+              type: "openzeppelin_upgrades::upgradeable::UpgradeableComponent::Event",
+              kind: "flat",
+            },
+          ],
+        },
+      ],
+      classHash:
+        "0x5a4f33d8b6b2f1eabdd027b38e800738d48860405427738777a297f697637a2",
+    },
   },
 } as const;
 

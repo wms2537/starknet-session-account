@@ -2,6 +2,10 @@
 
 A StarkNet account implementation that introduces secure and flexible session key management, enabling delegated transaction execution with granular permissions and policy controls.
 
+Declared Class Hash:
+* Sepolia
+  * 0x5a4f33d8b6b2f1eabdd027b38e800738d48860405427738777a297f697637a2
+
 ## Features
 
 ### 🔑 Session Key Management
